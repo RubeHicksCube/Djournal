@@ -1,0 +1,57 @@
+{
+  "name": "ai-life",
+  "version": "1.0.0",
+  "description": "AI Life - Personal Activity Tracker: A simple, self-hosted personal activity tracking application with health metrics, journaling, and life coaching features.",
+  "main": "server/index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
+    "server:dev": "nodemon server/index.js",
+    "client:dev": "cd client && npm run dev",
+    "build": "cd client && npm run build",
+    "start": "node server/index.js",
+    "init-db": "node server/scripts/initDatabase.js",
+    "seed-topics": "node server/scripts/seedTopics.js",
+    "seed-life": "node server/scripts/seedLifeTopics.js",
+    "docker:build": "docker build -t ai-life .",
+    "docker:run": "docker run -p 8000:8000 --name ai-life ai-life",
+    "docker:stop": "docker stop ai-life && docker rm ai-life"
+  },
+  "keywords": [
+    "health",
+    "journal",
+    "life-management",
+    "activity-tracker",
+    "self-hosted",
+    "docker",
+    "wellness",
+    "personal-productivity",
+    "therapy",
+    "markdown"
+  ],
+  "author": "AI Life",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/ai-life.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/ai-life/issues"
+  },
+  "homepage": "https://github.com/your-username/ai-life#readme",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "archiver": "^6.0.2",
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^9.2.2",
+    "cors": "^2.8.5",
+    "date-fns": "^3.0.6",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
+    "marked": "^11.1.1"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "nodemon": "^3.0.2"
+  }
+}
