@@ -211,8 +211,8 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Username and password required' });
   }
 
-  // Find user
-  const user = users.find(u => u.username === username);
+  // Find user by username or email
+  const user = users.find(u => u.username === username || u.email === username);
 
   if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' });
