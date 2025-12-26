@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { format } from 'date-fns';
+
+const formatDate = (dateStr) => {
+  const date = new Date(dateStr);
+  return format(date, 'yyyyMMMdd');
+};
 
 export default function Home() {
   const [state, setState] = useState(null);
@@ -202,7 +208,7 @@ export default function Home() {
     <div className="container">
       <header>
         <div className="date-header">
-          <h1 className="date-large">{state.date}</h1>
+          <h1 className="date-large">{formatDate(state.date)}</h1>
           <p className="time-large">{currentTime.toLocaleTimeString('en-US', { hour12: false })}</p>
         </div>
       </header>

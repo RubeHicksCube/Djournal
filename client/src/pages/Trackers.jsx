@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { format } from 'date-fns';
 
 export default function Trackers() {
   const [state, setState] = useState(null);
@@ -13,6 +14,7 @@ export default function Trackers() {
   const [durationName, setDurationName] = useState('');
   const [durationMinutes, setDurationMinutes] = useState('');
   const [durationType, setDurationType] = useState('counter'); // 'timer' or 'counter'
+  const [manualTimeInput, setManualTimeInput] = useState(''); // For manually setting elapsed time
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // Custom Counter form
@@ -84,8 +86,37 @@ export default function Trackers() {
       setState(data);
       setDurationName('');
       setDurationMinutes('');
+      setManualTimeInput('');
     } catch (error) {
       console.error('Error adding duration tracker:', error);
+    }
+  };
+
+  const handleSetManualTime = async (trackerId, minutes) => {
+    if (!minutes || minutes <= 0) return;
+    
+    try {
+      // Convert minutes to milliseconds and set as elapsed time
+      const elapsedMs = minutes * 60 * 1000;
+      // Create a fake start time that results in the desired elapsed time
+      const startTime = new Date(Date.now() - elapsedMs);
+      
+      const response = await fetch('/api/trackers/manual-time', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('authToken')}`
+        },
+        body: JSON.stringify({ trackerId, startTime, elapsedMs })
+      });
+      
+      const data = await response.json();
+      if (response.ok) {
+        setState(data);
+        setManualTimeInput('');
+      }
+    } catch (error) {
+      console.error('Error setting manual time:', error);
     }
   };
 
@@ -98,7 +129,12 @@ export default function Trackers() {
     }
   };
 
-  const calculateDaysSince = (date) => {
+  const formatDate = (dateStr) => {
+  const date = new Date(dateStr);
+  return format(date, 'yyyyMMMdd');
+};
+
+const calculateDaysSince = (date) => {
     const then = new Date(date);
     const now = new Date();
     const diffTime = Math.abs(now - then);
@@ -212,7 +248,7 @@ export default function Trackers() {
     <div className="container">
       <header>
         <div className="date-header">
-          <h1 className="date-large">{state.date}</h1>
+          <h1 className="date-large">{formatDate(state.date)}</h1>
           <p className="time-large">{currentTime.toLocaleTimeString('en-US', { hour12: false })}</p>
         </div>
       </header>
@@ -320,6 +356,23 @@ export default function Trackers() {
                         >
                           🔄
                         </button>
+                        <div className="manual-time-input">
+                          <input
+                            type="number"
+                            placeholder="Min"
+                            min="1"
+                            value={manualTimeInput}
+                            onChange={(e) => setManualTimeInput(e.target.value)}
+                            className="form-input form-input-sm"
+                          />
+                          <button
+                            onClick={() => handleSetManualTime(tracker.id, parseInt(manualTimeInput))}
+                            className="btn btn-sm btn-primary"
+                            title="Set manual time spent"
+                          >
+                            ⏱️ Set
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       <div className="counter-controls">

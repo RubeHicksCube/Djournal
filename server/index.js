@@ -32,7 +32,7 @@ users.push(defaultAdmin);
 
 // Mock state storage (in-memory)
 const dailyState = {
-  date: new Date().toISOString().split('T')[0],
+  date: new Date().toISOString().slice(0, 10),
   previousBedtime: '',
   wakeTime: '',
   customFields: [],           // Template-based custom fields (persist name, reset value daily)
@@ -711,6 +711,29 @@ app.post('/api/trackers/duration', authMiddleware, (req, res) => {
 app.delete('/api/trackers/duration/:id', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id);
   dailyState.durationTrackers = dailyState.durationTrackers.filter(t => t.id !== id);
+  res.json(dailyState);
+});
+
+// Set manual time for timer
+app.post('/api/trackers/manual-time', authMiddleware, (req, res) => {
+  const { trackerId, startTime, elapsedMs } = req.body;
+
+  // Find tracker
+  const tracker = dailyState.durationTrackers.find(t => t.id === parseInt(trackerId));
+  if (!tracker) {
+    return res.status(404).json({ error: 'Tracker not found' });
+  }
+
+  if (tracker.type !== 'timer') {
+    return res.status(400).json({ error: 'Manual time only works with timer trackers' });
+  }
+
+  // Update tracker with manual time
+  tracker.startTime = startTime;
+  tracker.elapsedMs = elapsedMs;
+  tracker.isRunning = false;
+
+  console.log(`Set manual time for tracker ${trackerId}: ${elapsedMs}ms`);
   res.json(dailyState);
 });
 
