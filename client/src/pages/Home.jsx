@@ -53,6 +53,26 @@ export default function Home() {
     // Prevent unnecessary updates if value hasn't actually changed
     if (state[field] === value) return;
     
+    // Handle time input digit conversion for time fields
+    if (value && (field === 'previousBedtime' || field === 'wakeTime')) {
+      // Convert digit input like "554" to proper HH:MM format
+      if (/^\d+$/.test(value)) {
+        const numStr = value.toString().padStart(4, '0');
+        if (numStr.length <= 4) {
+          // "54" -> "00:54", "554" -> "05:54"
+          const hours = numStr.slice(0, 2);
+          const minutes = numStr.slice(2, 4);
+          value = `${hours}:${minutes}`;
+        } else if (numStr.length === 3) {
+          // "554" -> "05:54" 
+          value = `0${numStr.slice(0, 1)}:${numStr.slice(1)}`;
+        } else if (numStr.length >= 4) {
+          // "1234" -> "12:34"
+          value = `${numStr.slice(0, 2)}:${numStr.slice(2, 4)}`;
+        }
+      }
+    }
+    
     try {
       const data = await api.updateDaily({ [field]: value });
       setState(data);

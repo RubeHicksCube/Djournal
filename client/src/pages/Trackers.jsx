@@ -131,7 +131,7 @@ export default function Trackers() {
 
   const formatDate = (dateStr) => {
   const date = new Date(dateStr);
-  return format(date, 'yyyyMMMdd');
+  return format(date, 'yyyy-MMM-dd');
 };
 
 const calculateDaysSince = (date) => {
