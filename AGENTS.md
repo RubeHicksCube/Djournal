@@ -9,6 +9,8 @@ This file provides guidance for agentic coding agents working with the AI Life c
 npm install                # Install server dependencies
 cd client && npm install   # Install client dependencies
 npm run init-db           # Initialize database with user profile
+npm run seed-topics        # Seed therapeutic topics
+npm run seed-life          # Seed life coaching topics
 ```
 
 ### Development
@@ -24,22 +26,35 @@ npm run build            # Build React frontend
 npm start                # Start production server
 ```
 
+### Docker
+```bash
+npm run docker:build      # Build Docker image
+npm run docker:run        # Run Docker container (port 8000)
+npm run docker:stop       # Stop and remove container
+```
+
 ### Testing
-This project currently has no test framework configured. When adding tests:
-- Use Jest for backend unit tests
+**No test framework currently configured**. When adding tests:
+- Use Jest for backend unit tests (`npm install --save-dev jest`)
 - Use Vitest for frontend tests (already available with Vite)
 - Place tests in `server/tests/` and `client/tests/` directories
+- Create test configuration files as needed
 
-#### Running Single Tests
+#### Running Single Tests (when implemented)
 ```bash
-# Backend (when Jest is added)
+# Backend (Jest)
 npm test -- path/to/test.test.js
 npm test -- --testNamePattern="specific test"
 
-# Frontend (when Vitest is added)
+# Frontend (Vitest)
 cd client && npm test path/to/test.test.js
 cd client && npm test -- -t "specific test"
 ```
+
+### Linting/Type Checking
+**No linting tools currently configured**. Consider adding:
+- ESLint for code quality (`npm install --save-dev eslint`)
+- Prettier for formatting (`npm install --save-dev prettier`)
 
 ## Code Style Guidelines
 
@@ -49,7 +64,6 @@ cd client && npm test -- -t "specific test"
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs').promises;
 require('dotenv').config();
 ```
 
@@ -66,6 +80,9 @@ import { api } from '../services/api';
 - **Constants**: UPPER_SNAKE_CASE (`PORT`, `NODE_ENV`)
 - **Files**: PascalCase for components (`Home.jsx`), camelCase for utilities (`api.js`)
 - **Routes**: kebab-case (`/api/state`, `/api/daily`)
+
+### TypeScript
+**This codebase uses plain JavaScript, not TypeScript**. All files are `.js` or `.jsx`.
 
 ### Error Handling
 - Always use try/catch blocks for async operations
@@ -94,10 +111,11 @@ try {
 ```
 
 ### React Component Patterns
-- Use functional components with hooks
+- Use functional components with hooks only (no class components)
 - Keep state management simple with `useState`
 - Use `useEffect` for side effects and data loading
 - Follow the existing pattern of self-contained pages
+- Always export as `export default function ComponentName()`
 
 ```javascript
 export default function ComponentName() {
@@ -174,6 +192,56 @@ journal/
 - Client: Local component state with `useState`
 - No global state management (Redux, Context, etc.)
 - Direct API calls for data synchronization
+
+### Date/Time Handling
+- Use `new Date().toISOString().split('T')[0]` for date strings
+- Use `toLocaleTimeString()` for human-readable times
+- Store dates in ISO format for consistency
+- Calculate time differences using Date objects
+
+### Code Organization Principles
+- Keep functions small and focused
+- Use descriptive variable and function names
+- Group related functionality together
+- Maintain separation of concerns (UI, API, data)
+- Follow existing patterns rather than introducing new ones
+
+### Security Considerations
+- No authentication needed (single-user local system)
+- Validate input data on server side
+- Sanitize user-generated content before export
+- Use environment variables for configuration
+
+### Performance Guidelines
+- Minimize re-renders by proper state management
+- Use loading states for better UX
+- Debounce user input where appropriate
+- Keep API responses lightweight
+
+### Date/Time Handling
+- Use `new Date().toISOString().split('T')[0]` for date strings
+- Use `toLocaleTimeString()` for human-readable times
+- Store dates in ISO format for consistency
+- Calculate time differences using Date objects
+
+### Code Organization Principles
+- Keep functions small and focused
+- Use descriptive variable and function names
+- Group related functionality together
+- Maintain separation of concerns (UI, API, data)
+- Follow existing patterns rather than introducing new ones
+
+### Security Considerations
+- No authentication needed (single-user local system)
+- Validate input data on server side
+- Sanitize user-generated content before export
+- Use environment variables for configuration
+
+### Performance Guidelines
+- Minimize re-renders by proper state management
+- Use loading states for better UX
+- Debounce user input where appropriate
+- Keep API responses lightweight
 
 ### Date/Time Handling
 - Use `new Date().toISOString().split('T')[0]` for date strings
