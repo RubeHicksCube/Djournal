@@ -1,6 +1,6 @@
-# AI Life - Personal Activity Tracker v1.0.0
+# Djournal - Daily Journal v1.0.0
 
-A simple, self-hosted personal activity tracking application designed for daily life management. Combines health tracking, journaling, and life coaching features in a clean, minimalist interface.
+A simple, self-hosted daily journal application for logging activities minute-by-minute and exporting to your favorite second-brain apps.
 
 ## ✨ Features
 
@@ -13,12 +13,12 @@ A simple, self-hosted personal activity tracking application designed for daily 
 
 ## 🚀 Quick Start (Docker Compose)
 
-The easiest way to get AI Life running is with Docker Compose:
+The easiest way to get Djournal running is with Docker Compose:
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/ai-life.git
-cd ai-life
+git clone https://github.com/RubeHicksCube/Djournal.git
+cd Djournal
 
 # Start the application
 docker-compose up -d
@@ -44,13 +44,13 @@ docker-compose up -d
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/ai-life.git
-cd ai-life
+git clone https://github.com/RubeHicksCube/Djournal.git
+cd Djournal
 
 # Install dependencies
 npm install
 
-# Build the React client
+# Build React client
 npm run build
 
 # Start the application
@@ -90,16 +90,16 @@ environment:
 
 ## 🗂️ Data Storage
 
-AI Life uses a hybrid storage approach:
+Djournal uses a hybrid storage approach:
 
-- **SQLite Database** (`data/ailife.db`): User accounts, health metrics, goals
+- **SQLite Database** (`data/djournal.db`): User accounts, health metrics, goals
 - **Markdown Files** (`journal/`): Daily journal entries in `YYYY-MM-DD.md` format
 
 ### Docker Volumes
 
 When using Docker Compose, data is stored in named volumes:
-- `ai-life-data`: SQLite database and structured data
-- `ai-life-journal`: Markdown journal entries
+- `djournal-data`: SQLite database and structured data
+- `djournal-journal`: Markdown journal entries
 
 ## 📱 Usage Guide
 
@@ -164,7 +164,7 @@ This starts:
 ### Project Structure
 
 ```
-ai-life/
+Djournal/
 ├── server/                 # Node.js backend
 │   ├── index.js           # Main server file
 │   └── routes/            # API route handlers
@@ -184,7 +184,7 @@ ai-life/
 
 ```bash
 # Docker volumes backup
-docker run --rm -v ai-life-data:/data -v ai-life-journal:/journal -v $(pwd):/backup alpine tar czf /backup/ai-life-backup.tar.gz /data /journal
+docker run --rm -v djournal-data:/data -v djournal-journal:/journal -v $(pwd):/backup alpine tar czf /backup/djournal-backup.tar.gz /data /journal
 
 # Manual backup (non-Docker)
 cp -r data/ journal/ backup/
@@ -194,7 +194,7 @@ cp -r data/ journal/ backup/
 
 ```bash
 # Docker volumes restore
-docker run --rm -v ai-life-data:/data -v ai-life-journal:/journal -v $(pwd):/backup alpine tar xzf /backup/ai-life-backup.tar.gz -C /
+docker run --rm -v djournal-data:/data -v djournal-journal:/journal -v $(pwd):/backup alpine tar xzf /backup/djournal-backup.tar.gz -C /
 ```
 
 ## 🔄 Updates
@@ -268,7 +268,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 If you encounter issues or have questions:
 
 1. Check the troubleshooting section above
-2. Search existing [GitHub Issues](https://github.com/your-username/ai-life/issues)
+2. Search existing [GitHub Issues](https://github.com/RubeHicksCube/Djournal/issues)
 3. Create a new issue with detailed information
 
 ## 🎯 Roadmap
@@ -283,4 +283,4 @@ Future enhancements planned:
 
 ---
 
-**AI Life v1.0.0** - Built with ❤️ for personal productivity and wellness.
+**Djournal v1.0.0** - Built with ❤️ for daily journaling and personal productivity.

@@ -1,7 +1,7 @@
 {
-  "name": "ai-life",
+  "name": "djournal",
   "version": "1.0.0",
-  "description": "AI Life - Personal Activity Tracker: A simple, self-hosted personal activity tracking application with health metrics, journaling, and life coaching features.",
+  "description": "Djournal - Daily Journal: A simple, self-hosted daily journal application for logging activities minute-by-minute and exporting to second-brain apps.",
   "main": "server/index.js",
   "scripts": {
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
@@ -12,9 +12,9 @@
     "init-db": "node server/scripts/initDatabase.js",
     "seed-topics": "node server/scripts/seedTopics.js",
     "seed-life": "node server/scripts/seedLifeTopics.js",
-    "docker:build": "docker build -t ai-life .",
-    "docker:run": "docker run -p 8000:8000 --name ai-life ai-life",
-    "docker:stop": "docker stop ai-life && docker rm ai-life"
+    "docker:build": "docker build -t djournal .",
+    "docker:run": "docker run -p 8000:8000 --name djournal djournal",
+    "docker:stop": "docker stop djournal && docker rm djournal"
   },
   "keywords": [
     "health",
@@ -28,16 +28,16 @@
     "therapy",
     "markdown"
   ],
-  "author": "AI Life",
+  "author": "Djournal",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/ai-life.git"
+    "url": "https://github.com/RubeHicksCube/Djournal.git"
   },
   "bugs": {
-    "url": "https://github.com/your-username/ai-life/issues"
+    "url": "https://github.com/RubeHicksCube/Djournal/issues"
   },
-  "homepage": "https://github.com/your-username/ai-life#readme",
+  "homepage": "https://github.com/RubeHicksCube/Djournal#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "archiver": "^6.0.2",

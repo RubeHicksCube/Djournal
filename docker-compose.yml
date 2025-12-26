@@ -3,7 +3,7 @@ version: '3.8'
 services:
   app:
     build: .
-    container_name: ai-life
+    container_name: djournal
     ports:
       - "8000:8000"
     environment:
@@ -12,8 +12,8 @@ services:
       - JWT_SECRET=${JWT_SECRET:-change-this-secret-key-in-production}
       - PORT=8000
     volumes:
-      - ai-life-data:/app/data
-      - ai-life-journal:/app/journal
+      - djournal-data:/app/data
+      - djournal-journal:/app/journal
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8000/api"]
@@ -23,7 +23,7 @@ services:
       start_period: 40s
 
 volumes:
-  ai-life-data:
+  djournal-data:
     driver: local
-  ai-life-journal:
+  djournal-journal:
     driver: local
