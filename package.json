@@ -5,10 +5,10 @@
   "main": "server/index.js",
   "scripts": {
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
-    "server:dev": "nodemon server/index.js",
+    "server:dev": "PORT=8001 nodemon server/index.js",
     "client:dev": "cd client && npm run dev",
     "build": "cd client && npm run build",
-    "start": "node server/index.js",
+    "start": "PORT=8000 node server/index.js",
     "init-db": "node server/scripts/initDatabase.js",
     "seed-topics": "node server/scripts/seedTopics.js",
     "seed-life": "node server/scripts/seedLifeTopics.js",
