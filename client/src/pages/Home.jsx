@@ -50,6 +50,9 @@ export default function Home() {
   };
 
   const updateDaily = async (field, value) => {
+    // Prevent unnecessary updates if value hasn't actually changed
+    if (state[field] === value) return;
+    
     try {
       const data = await api.updateDaily({ [field]: value });
       setState(data);
@@ -223,20 +226,20 @@ export default function Home() {
               <label className="form-label">Previous Day Bedtime</label>
               <input
                 type="time"
-                className="form-input"
-                value={state.previousBedtime}
-                onChange={(e) => updateDaily('previousBedtime', e.target.value)}
-              />
+                  className="form-input"
+                  value={state.previousBedtime || ''}
+                  onChange={(e) => updateDaily('previousBedtime', e.target.value)}
+                />
             </div>
 
             <div className="form-group">
               <label className="form-label">Today's Wake Time</label>
               <input
                 type="time"
-                className="form-input"
-                value={state.wakeTime}
-                onChange={(e) => updateDaily('wakeTime', e.target.value)}
-              />
+                  className="form-input"
+                  value={state.wakeTime || ''}
+                  onChange={(e) => updateDaily('wakeTime', e.target.value)}
+                />
             </div>
           </div>
         </div>

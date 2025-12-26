@@ -1,5 +1,11 @@
 import { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { format } from 'date-fns';
+
+const formatDateDisplay = (dateStr) => {
+  const date = new Date(dateStr);
+  return format(date, 'yyyy-MMM-dd');
+};
 
 export default function Profile() {
   const [currentUser, setCurrentUser] = useState(null);
@@ -564,7 +570,7 @@ export default function Profile() {
               <div className="dates-list">
                 {availableDates.map(date => (
                   <div key={date} className="date-item">
-                    <span className="date-badge">📅 {date}</span>
+                    <span className="date-badge">📅 {formatDateDisplay(date)}</span>
                     <div className="date-actions">
                       <button
                         onClick={() => {
