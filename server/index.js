@@ -1068,7 +1068,7 @@ app.post('/api/trackers/timer/start/:id', authMiddleware, (req, res) => {
   // Update tracker in database
   dataAccess.updateDurationTracker(id, {
     isRunning: true,
-    startTime: Date.now()
+    startTime: new Date().toISOString()
   });
 
   const state = getUserState(userId);
@@ -1084,8 +1084,8 @@ app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
   const tracker = trackers.find(t => t.id === id);
 
   if (tracker && tracker.type === 'timer' && tracker.isRunning) {
-    const elapsed = Date.now() - tracker.startTime;
-    const newElapsedMs = tracker.elapsedMs + elapsed;
+    const elapsed = Date.now() - new Date(tracker.startTime).getTime();
+    const newElapsedMs = (tracker.elapsedMs || 0) + elapsed;
     const newValue = Math.floor(newElapsedMs / 1000);
 
     dataAccess.updateDurationTracker(id, {
