@@ -227,17 +227,29 @@ export default function Home() {
     return <div className="loading">Loading...</div>;
   }
 
+  if (loading) {
+    return <div className="loading">Loading...</div>;
+  }
+
+  if (loading) {
+    return <div className="loading">Loading...</div>;
+  }
+
   return (
     <div className="container">
       <header>
         <div className="date-header">
-          <h1 className="date-large">{formatDate(state.date)}</h1>
+          <h1 className="date-large">{state.date ? formatDate(state.date) : 'Loading...'}</h1>
           <p className="time-large">{currentTime.toLocaleTimeString('en-US', { hour12: false })}</p>
         </div>
       </header>
 
       <div className="grid-layout">
-        <div className="card card-primary">
+        {loading ? (
+        <div className="loading">Loading...</div>
+      ) : (
+        <>
+      <div className="card card-primary">
           <h2>⏰ Daily Data</h2>
           <p className="card-description">Sleep schedule tracking</p>
 
@@ -416,8 +428,8 @@ export default function Home() {
               type="file"
               accept="image/*"
               onChange={handleImageSelect}
-              style={{ display: 'none' }}
             />
+          </div>
             {imagePreview && (
               <div className="image-preview">
                 <img src={imagePreview} alt="Preview" />
