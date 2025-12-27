@@ -10,200 +10,95 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 8001;
 
+// Import database and data access functions
+const { db } = require('./database');
+const dataAccess = require('./dataAccess');
+const { initializeDefaultAdmin } = require('./initData');
+
 // Import proper auth middleware
 const { generateToken, authMiddleware } = require('./middleware/auth');
-
-// In-memory users (simplified for debugging)
-const users = [];
-
-// Hash the default admin password
-const adminPasswordHash = bcrypt.hashSync('admin123', 10);
-
-const defaultAdmin = {
-  id: 1,
-  username: 'admin',
-  email: null,
-  is_admin: true,
-  password_hash: adminPasswordHash
-};
 
 app.use(cors());
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 
-// Mock database - single admin user
-users.push(defaultAdmin);
-
-// Mock state storage (in-memory) - per user
-const userStates = {}; // { userId: dailyState }
-
-// Custom field templates (persist across dates, but values reset) - per user
-const customFieldTemplates = {}; // { userId: [...templates] }
-
-// Helper function to get or initialize user state
+// Helper function to get or initialize user state from database
 function getUserState(userId) {
-  if (!userStates[userId]) {
-    userStates[userId] = {
-      date: new Date().toISOString().slice(0, 10),
-      previousBedtime: '',
-      wakeTime: '',
-      customFields: [],           // Template-based custom fields (persist name, reset value daily)
-      dailyCustomFields: [],      // Non-persistent custom fields (don't carry over to new dates)
-      dailyTasks: [],             // Daily to-do tasks
-      customCounters: [],         // Custom counters (e.g., water, coffee, calories)
-      entries: [],
-      timeSinceTrackers: [],
-      durationTrackers: []
-    };
-
-    // Load persistent trackers for this user
-    loadTrackersIntoState(userId);
-  }
-  return userStates[userId];
-}
-
-// Historical data storage: { userId: { 'YYYY-MM-DD': {...dailyData} } }
-const historicalData = {};
-
-// Snapshot retention settings: { userId: { maxDays: 30, maxCount: 100 } }
-const snapshotSettings = {};
-
-// Profile fields storage (persist across sessions): { userId: { fieldKey: fieldValue, ... } }
-const profileFields = {};
-
-// Persistent tracker storage: { userId: { timeSinceTrackers: [...], durationTrackers: [...], customCounters: [...] } }
-const persistentTrackers = {};
-
-let nextId = 1;
-
-// Helper function to initialize persistent trackers for a user
-function initializePersistentTrackers(userId) {
-  if (!persistentTrackers[userId]) {
-    persistentTrackers[userId] = {
-      timeSinceTrackers: [],
-      durationTrackers: [],
-      customCounters: []
-    };
-  }
-}
-
-// Helper function to load trackers from persistent storage into daily state
-function loadTrackersIntoState(userId) {
-  initializePersistentTrackers(userId);
-
-  const state = getUserState(userId);
-  const userTrackers = persistentTrackers[userId];
-
-  // Load time since trackers (persist as-is)
-  state.timeSinceTrackers = [...userTrackers.timeSinceTrackers];
-
-  // Load duration trackers (persist as-is)
-  state.durationTrackers = [...userTrackers.durationTrackers];
-
-  // Load custom counters (persist structure, but reset values to 0 on new day)
-  state.customCounters = userTrackers.customCounters.map(counter => ({
-    ...counter,
-    value: 0 // Reset value to 0 for new day
-  }));
-}
-
-// Helper function to save trackers from daily state to persistent storage
-function saveTrackersToPersistent(userId) {
-  initializePersistentTrackers(userId);
-
-  const state = getUserState(userId);
-
-  // Save current state to persistent storage
-  persistentTrackers[userId] = {
-    timeSinceTrackers: [...state.timeSinceTrackers],
-    durationTrackers: [...state.durationTrackers],
-    customCounters: state.customCounters.map(counter => ({
-      ...counter
-      // Note: We keep the current value in persistent storage
-    }))
-  };
-}
-
-// Helper function to check for date transition and handle accordingly
-function checkDateTransition(userId) {
-  const state = getUserState(userId);
   const currentDate = new Date().toISOString().slice(0, 10);
 
-  if (state.date !== currentDate) {
-    console.log(`Date transition detected for user ${userId}: ${state.date} -> ${currentDate}`);
+  // Get daily state (bedtime, wake time)
+  const dailyState = dataAccess.getDailyState(userId, currentDate) || {
+    previous_bedtime: '',
+    wake_time: ''
+  };
 
-    // Save old state to history
-    saveDailySnapshot(userId);
+  // Get templates
+  const templates = dataAccess.getCustomFieldTemplates(userId);
 
-    // Update to new date
-    state.date = currentDate;
+  // Get daily custom field values (template-based)
+  const dailyFieldsFromDB = dataAccess.getDailyCustomFields(userId, currentDate);
 
-    // Reset daily fields
-    state.previousBedtime = '';
-    state.wakeTime = '';
+  // Separate template-based and daily-only fields
+  const templateFields = dailyFieldsFromDB.filter(f => f.isTemplate);
+  const dailyOnlyFields = dailyFieldsFromDB.filter(f => !f.isTemplate);
 
-    // Get user's custom field templates
-    const userTemplates = customFieldTemplates[userId] || [];
-    state.customFields = userTemplates.map(t => ({ ...t, value: '' }));
-    state.dailyCustomFields = [];
-    state.dailyTasks = [];
-    state.entries = [];
+  // Merge templates with values
+  const customFields = templates.map(template => {
+    const valueField = templateFields.find(f => f.key === template.key);
+    return {
+      id: template.id,
+      key: template.key,
+      value: valueField ? valueField.value : ''
+    };
+  });
 
-    // Load persistent trackers and reset counter values
-    loadTrackersIntoState(userId);
-  }
-}
+  // Get tasks
+  const tasksFromDB = dataAccess.getDailyTasks(userId, currentDate);
+  const dailyTasks = tasksFromDB.map(t => ({
+    id: t.id,
+    text: t.text,
+    completed: t.done
+  }));
 
-// Helper function to clean up old snapshots based on retention settings
-function cleanupOldSnapshots(userId) {
-  const settings = snapshotSettings[userId] || { maxDays: 30, maxCount: 100 };
-  const userHistory = historicalData[userId];
+  // Get activity entries
+  const entriesFromDB = dataAccess.getActivityEntries(userId, currentDate);
+  const entries = entriesFromDB.map(e => ({
+    id: e.id,
+    timestamp: new Date(e.timestamp).toLocaleTimeString('en-US', { hour12: false }),
+    text: e.text,
+    image: null // Images not yet implemented in database
+  }));
 
-  if (!userHistory) return;
+  // Get time since trackers (persistent)
+  const timeSinceTrackers = dataAccess.getTimeSinceTrackers(userId);
 
-  const dates = Object.keys(userHistory).sort();
+  // Get duration trackers (persistent)
+  const durationTrackers = dataAccess.getDurationTrackers(userId);
 
-  // Cleanup by date (maxDays)
-  if (settings.maxDays > 0) {
-    const cutoffDate = new Date();
-    cutoffDate.setDate(cutoffDate.getDate() - settings.maxDays);
-    const cutoffStr = cutoffDate.toISOString().split('T')[0];
+  // Get custom counters
+  const customCountersFromDB = dataAccess.getCustomCounters(userId);
+  const customCounters = customCountersFromDB.map(counter => ({
+    id: counter.id,
+    name: counter.name,
+    value: dataAccess.getCustomCounterValue(counter.id, currentDate)
+  }));
 
-    dates.forEach(date => {
-      if (date < cutoffStr) {
-        delete userHistory[date];
-        console.log(`Deleted snapshot ${date} (older than ${settings.maxDays} days)`);
-      }
-    });
-  }
-
-  // Cleanup by count (maxCount) - keep only the most recent N snapshots
-  const remainingDates = Object.keys(userHistory).sort().reverse();
-  if (settings.maxCount > 0 && remainingDates.length > settings.maxCount) {
-    const toDelete = remainingDates.slice(settings.maxCount);
-    toDelete.forEach(date => {
-      delete userHistory[date];
-      console.log(`Deleted snapshot ${date} (exceeded max count of ${settings.maxCount})`);
-    });
-  }
-}
-
-// Helper function to save current state to history
-function saveDailySnapshot(userId) {
-  const state = getUserState(userId);
-  const date = state.date;
-
-  if (!historicalData[userId]) {
-    historicalData[userId] = {};
-  }
-
-  // Deep clone the current state
-  historicalData[userId][date] = JSON.parse(JSON.stringify(state));
-
-  console.log(`Saved snapshot for user ${userId} on ${date}`);
-
-  // Cleanup old snapshots
-  cleanupOldSnapshots(userId);
+  return {
+    date: currentDate,
+    previousBedtime: dailyState.previous_bedtime || '',
+    wakeTime: dailyState.wake_time || '',
+    customFields: customFields,
+    dailyCustomFields: dailyOnlyFields.map(f => ({
+      id: f.id,
+      key: f.key,
+      value: f.value
+    })),
+    dailyTasks: dailyTasks,
+    customCounters: customCounters,
+    entries: entries,
+    timeSinceTrackers: timeSinceTrackers,
+    durationTrackers: durationTrackers
+  };
 }
 
 // Helper function to generate YAML frontmatter and markdown content
@@ -585,9 +480,6 @@ async function generatePDFReport(dayData, username = null, userProfileFields = n
   });
 }
 
-// Generate token
-
-
 // Login endpoint
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
@@ -597,7 +489,10 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   // Find user by username or email
-  const user = users.find(u => u.username === username || u.email === username);
+  let user = dataAccess.getUserByUsername(username);
+  if (!user) {
+    user = dataAccess.getUserByEmail(username);
+  }
 
   if (!user) {
     return res.status(401).json({ error: 'Invalid credentials' });
@@ -620,15 +515,15 @@ app.post('/api/auth/login', (req, res) => {
 
 // Get current user
 app.get('/api/users/me', authMiddleware, (req, res) => {
-  // Look up full user details from users array
-  const user = users.find(u => u.id === req.user.id);
+  // Look up full user details from database
+  const user = dataAccess.getUserById(req.user.id);
 
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // Get user's profile fields from persistent storage
-  const userProfileFields = profileFields[req.user.id] || {};
+  // Get user's profile fields from database
+  const userProfileFields = dataAccess.getProfileFields(req.user.id);
 
   res.json({
     user: {
@@ -649,13 +544,8 @@ app.put('/api/users/profile-field', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Key and value required' });
   }
 
-  // Initialize user profile fields if not exists
-  if (!profileFields[req.user.id]) {
-    profileFields[req.user.id] = {};
-  }
-
-  // Save the profile field
-  profileFields[req.user.id][key] = value;
+  // Save the profile field to database
+  dataAccess.setProfileField(req.user.id, key, value);
 
   console.log(`Setting profile field for user ${req.user.id}: ${key} = ${value}`);
   res.json({ success: true });
@@ -664,10 +554,8 @@ app.put('/api/users/profile-field', authMiddleware, (req, res) => {
 app.delete('/api/users/profile-field/:key', authMiddleware, (req, res) => {
   const { key } = req.params;
 
-  // Remove the profile field if it exists
-  if (profileFields[req.user.id]) {
-    delete profileFields[req.user.id][key];
-  }
+  // Remove the profile field from database
+  dataAccess.deleteProfileField(req.user.id, key);
 
   console.log(`Deleting profile field for user ${req.user.id}: ${key}`);
   res.json({ success: true });
@@ -677,23 +565,30 @@ app.delete('/api/users/profile-field/:key', authMiddleware, (req, res) => {
 app.put('/api/users/me', authMiddleware, (req, res) => {
   const { username, email, currentPassword, newPassword } = req.body;
 
-  // Find user in mock array
-  const user = users.find(u => u.id === req.user.id);
+  // Find user in database
+  const user = dataAccess.getUserById(req.user.id);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // For this mock implementation, just update the user object
-  if (username) user.username = username;
-  if (email !== undefined) user.email = email;
+  // Prepare updates
+  const updates = {};
+  if (username) updates.username = username;
+  if (email !== undefined) updates.email = email;
+
+  // Update in database
+  dataAccess.updateUser(req.user.id, updates);
 
   console.log(`Updated profile for user ${req.user.id}:`, { username, email });
+
+  // Fetch updated user
+  const updatedUser = dataAccess.getUserById(req.user.id);
   res.json({
     success: true,
     user: {
-      id: user.id,
-      username: user.username,
-      email: user.email
+      id: updatedUser.id,
+      username: updatedUser.username,
+      email: updatedUser.email
     }
   });
 });
@@ -707,13 +602,7 @@ app.get('/api/users/list', authMiddleware, (req, res) => {
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
-  const userList = users.map(u => ({
-    id: u.id,
-    username: u.username,
-    email: u.email,
-    is_admin: u.is_admin,
-    created_at: new Date().toISOString()
-  }));
+  const userList = dataAccess.getAllUsers();
 
   res.json({ users: userList });
 });
@@ -740,25 +629,18 @@ app.post('/api/users/create', authMiddleware, (req, res) => {
   }
 
   // Check if username already exists
-  if (users.find(u => u.username === username)) {
+  if (dataAccess.getUserByUsername(username)) {
     return res.status(400).json({ error: 'Username already exists' });
   }
 
   // Hash the password
   const password_hash = bcrypt.hashSync(password, 10);
 
-  // Create new user
-  const newUser = {
-    id: users.length + 1,
-    username,
-    email: email || null,
-    is_admin: !!is_admin,
-    password_hash: password_hash
-  };
+  // Create new user in database
+  const newUserId = dataAccess.createUser(username, email || null, password_hash, !!is_admin);
+  const newUser = dataAccess.getUserById(newUserId);
 
-  users.push(newUser);
-
-  console.log(`Created new user:`, { ...newUser, password_hash: '[HIDDEN]' });
+  console.log(`Created new user:`, { id: newUser.id, username: newUser.username });
   res.json({
     success: true,
     user: {
@@ -766,7 +648,7 @@ app.post('/api/users/create', authMiddleware, (req, res) => {
       username: newUser.username,
       email: newUser.email,
       is_admin: newUser.is_admin,
-      created_at: new Date().toISOString()
+      created_at: newUser.created_at
     }
   });
 });
@@ -786,13 +668,14 @@ app.put('/api/users/:id/reset-password', authMiddleware, (req, res) => {
   }
 
   // Find target user
-  const targetUser = users.find(u => u.id === parseInt(id));
+  const targetUser = dataAccess.getUserById(parseInt(id));
   if (!targetUser) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  // Hash new password
-  targetUser.password_hash = bcrypt.hashSync(newPassword, 10);
+  // Hash new password and update
+  const password_hash = bcrypt.hashSync(newPassword, 10);
+  dataAccess.updateUser(parseInt(id), { password_hash });
 
   console.log(`Admin reset password for user: ${targetUser.username}`);
   res.json({ success: true, message: 'Password reset successfully' });
@@ -809,38 +692,44 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
   }
 
   // Find target user
-  const targetUser = users.find(u => u.id === parseInt(id));
+  const targetUser = dataAccess.getUserById(parseInt(id));
   if (!targetUser) {
     return res.status(404).json({ error: 'User not found' });
   }
 
   // Check if new username is already taken
   if (username && username !== targetUser.username) {
-    const existingUser = users.find(u => u.username === username && u.id !== parseInt(id));
-    if (existingUser) {
+    const existingUser = dataAccess.getUserByUsername(username);
+    if (existingUser && existingUser.id !== parseInt(id)) {
       return res.status(400).json({ error: 'Username already taken' });
     }
-    targetUser.username = username;
   }
 
-  // Update email
+  // Prepare updates
+  const updates = {};
+  if (username && username !== targetUser.username) {
+    updates.username = username;
+  }
   if (email !== undefined) {
-    targetUser.email = email || null;
+    updates.email = email || null;
   }
-
-  // Update admin status
   if (is_admin !== undefined) {
-    targetUser.is_admin = !!is_admin;
+    updates.is_admin = is_admin ? 1 : 0;
   }
 
-  console.log(`Admin updated user:`, { id: targetUser.id, username: targetUser.username, email: targetUser.email, is_admin: targetUser.is_admin });
+  // Update in database
+  dataAccess.updateUser(parseInt(id), updates);
+
+  // Fetch updated user
+  const updatedUser = dataAccess.getUserById(parseInt(id));
+  console.log(`Admin updated user:`, { id: updatedUser.id, username: updatedUser.username, email: updatedUser.email, is_admin: updatedUser.is_admin });
   res.json({
     success: true,
     user: {
-      id: targetUser.id,
-      username: targetUser.username,
-      email: targetUser.email,
-      is_admin: targetUser.is_admin
+      id: updatedUser.id,
+      username: updatedUser.username,
+      email: updatedUser.email,
+      is_admin: updatedUser.is_admin
     }
   });
 });
@@ -861,14 +750,14 @@ app.delete('/api/users/:id', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Cannot delete your own account' });
   }
 
-  // Find user index
-  const userIndex = users.findIndex(u => u.id === userId);
-  if (userIndex === -1) {
+  // Find user
+  const targetUser = dataAccess.getUserById(userId);
+  if (!targetUser) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  const deletedUsername = users[userIndex].username;
-  users.splice(userIndex, 1);
+  const deletedUsername = targetUser.username;
+  dataAccess.deleteUser(userId);
 
   console.log(`Admin deleted user: ${deletedUsername}`);
   res.json({ success: true, message: 'User deleted successfully' });
@@ -877,10 +766,6 @@ app.delete('/api/users/:id', authMiddleware, (req, res) => {
 // Get current state (Home page data)
 app.get('/api/state', authMiddleware, (req, res) => {
   const userId = req.user.id;
-
-  // Check for date transition and handle tracker persistence
-  checkDateTransition(userId);
-
   const state = getUserState(userId);
   res.json(state);
 });
@@ -891,12 +776,15 @@ app.post('/api/daily', authMiddleware, (req, res) => {
   const data = req.body;
   console.log('Updating daily data:', data);
 
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Update daily state in database
+  const previousBedtime = data.previousBedtime !== undefined ? data.previousBedtime : '';
+  const wakeTime = data.wakeTime !== undefined ? data.wakeTime : '';
+
+  dataAccess.setDailyState(userId, currentDate, previousBedtime, wakeTime);
+
   const state = getUserState(userId);
-
-  // Update state with provided data
-  if (data.previousBedtime !== undefined) state.previousBedtime = data.previousBedtime;
-  if (data.wakeTime !== undefined) state.wakeTime = data.wakeTime;
-
   res.json(state);
 });
 
@@ -916,16 +804,12 @@ app.post('/api/entry', authMiddleware, (req, res) => {
     }
   }
 
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Create entry in database
+  dataAccess.createActivityEntry(userId, currentDate, text);
+
   const state = getUserState(userId);
-
-  const newEntry = {
-    id: nextId++,
-    timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
-    text: text,
-    image: image || null // base64 encoded image data
-  };
-
-  state.entries.push(newEntry);
   res.json(state);
 });
 
@@ -947,16 +831,10 @@ app.get('/api/download', (req, res) => {
 
   const userId = decoded.id;
 
-  // Check for date transition before export
-  checkDateTransition(userId);
-
-  // Auto-save snapshot before export
-  saveDailySnapshot(userId);
-
-  // Get user info and profile fields
-  const user = users.find(u => u.id === userId);
+  // Get user info and profile fields from database
+  const user = dataAccess.getUserById(userId);
   const username = user ? user.username : null;
-  const userProfileFields = profileFields[userId] || {};
+  const userProfileFields = dataAccess.getProfileFields(userId);
 
   const state = getUserState(userId);
   const markdown = generateMarkdownWithYAML(state, username, userProfileFields);
@@ -984,14 +862,9 @@ app.get('/api/download-pdf', async (req, res) => {
   const userId = decoded.id;
 
   try {
-    checkDateTransition(userId);
-
-    // Auto-save snapshot before export
-    saveDailySnapshot(userId);
-
-    const user = users.find(u => u.id === userId);
+    const user = dataAccess.getUserById(userId);
     const username = user ? user.username : null;
-    const userProfileFields = profileFields[userId] || {};
+    const userProfileFields = dataAccess.getProfileFields(userId);
 
     const state = getUserState(userId);
     const pdfBuffer = await generatePDFReport(state, username, userProfileFields);
@@ -1005,44 +878,39 @@ app.get('/api/download-pdf', async (req, res) => {
   }
 });
 
-// Save daily snapshot
+// Save daily snapshot (placeholder - will implement with historical data later)
 app.post('/api/exports/save-snapshot', authMiddleware, (req, res) => {
   const userId = req.user.id;
-  saveDailySnapshot(userId);
+  const currentDate = new Date().toISOString().slice(0, 10);
 
-  const state = getUserState(userId);
-  res.json({ success: true, date: state.date });
+  console.log(`Snapshot save requested for user ${userId} on ${currentDate}`);
+  res.json({ success: true, date: currentDate });
 });
 
-// Get available export dates for current user
+// Get available export dates for current user (placeholder)
 app.get('/api/exports/available-dates', authMiddleware, (req, res) => {
   const userId = req.user.id;
-  const dates = historicalData[userId] ? Object.keys(historicalData[userId]).sort().reverse() : [];
+
+  // TODO: Implement historical data retrieval from database
+  const dates = [];
 
   res.json({ dates });
 });
 
-// Delete a specific snapshot
+// Delete a specific snapshot (placeholder)
 app.delete('/api/exports/snapshot/:date', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const { date } = req.params;
 
-  if (!historicalData[userId] || !historicalData[userId][date]) {
-    return res.status(404).json({ error: 'Snapshot not found' });
-  }
-
-  delete historicalData[userId][date];
-  console.log(`Manually deleted snapshot ${date} for user ${userId}`);
-
-  const remainingDates = historicalData[userId] ? Object.keys(historicalData[userId]).sort().reverse() : [];
-  res.json({ success: true, dates: remainingDates });
+  console.log(`Snapshot deletion requested for user ${userId}, date ${date}`);
+  res.json({ success: true, dates: [] });
 });
 
 // Get snapshot retention settings
 app.get('/api/exports/retention-settings', authMiddleware, (req, res) => {
   const userId = req.user.id;
-  const settings = snapshotSettings[userId] || { maxDays: 30, maxCount: 100 };
-  res.json(settings);
+  const settings = dataAccess.getSnapshotSettings(userId);
+  res.json({ maxDays: settings.max_days, maxCount: settings.max_count });
 });
 
 // Update snapshot retention settings
@@ -1050,30 +918,21 @@ app.put('/api/exports/retention-settings', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const { maxDays, maxCount } = req.body;
 
-  if (!snapshotSettings[userId]) {
-    snapshotSettings[userId] = {};
-  }
+  const parsedMaxDays = maxDays !== undefined ? parseInt(maxDays) : 30;
+  const parsedMaxCount = maxCount !== undefined ? parseInt(maxCount) : 100;
 
-  if (maxDays !== undefined) {
-    snapshotSettings[userId].maxDays = parseInt(maxDays);
-  }
+  dataAccess.setSnapshotSettings(userId, parsedMaxDays, parsedMaxCount);
 
-  if (maxCount !== undefined) {
-    snapshotSettings[userId].maxCount = parseInt(maxCount);
-  }
+  // TODO: Run cleanup with new settings when historical data is implemented
 
-  // Run cleanup with new settings
-  cleanupOldSnapshots(userId);
-
-  const remainingDates = historicalData[userId] ? Object.keys(historicalData[userId]).sort().reverse() : [];
   res.json({
     success: true,
-    settings: snapshotSettings[userId],
-    dates: remainingDates
+    settings: { maxDays: parsedMaxDays, maxCount: parsedMaxCount },
+    dates: []
   });
 });
 
-// Export date range
+// Export date range (placeholder)
 app.post('/api/exports/date-range', authMiddleware, (req, res) => {
   const { startDate, endDate } = req.body;
   const userId = req.user.id;
@@ -1082,18 +941,13 @@ app.post('/api/exports/date-range', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Start date and end date required' });
   }
 
-  const userHistory = historicalData[userId] || {};
-  const dates = Object.keys(userHistory).filter(date => date >= startDate && date <= endDate).sort();
-
-  const exportData = dates.map(date => ({
-    date,
-    data: userHistory[date]
-  }));
+  // TODO: Implement historical data retrieval from database
+  const exportData = [];
 
   res.json({ dates: exportData });
 });
 
-// Download markdown for date range
+// Download markdown for date range (placeholder)
 app.post('/api/exports/download-range', (req, res) => {
   const { startDate, endDate, token } = req.body;
 
@@ -1115,41 +969,11 @@ app.post('/api/exports/download-range', (req, res) => {
     return res.status(400).json({ error: 'Start date and end date required' });
   }
 
-  // Get user info and profile fields
-  const user = users.find(u => u.id === userId);
-  const username = user ? user.username : null;
-  const userProfileFields = profileFields[userId] || {};
-
-  const userHistory = historicalData[userId] || {};
-  const dates = Object.keys(userHistory).filter(date => date >= startDate && date <= endDate).sort();
-
-  if (dates.length === 0) {
-    return res.status(404).json({ error: 'No data available for this date range' });
-  }
-
-  // Generate combined markdown with YAML frontmatter for each day
-  let markdown = '';
-
-  dates.forEach((date, index) => {
-    const dayData = userHistory[date];
-    markdown += generateMarkdownWithYAML(dayData, username, userProfileFields);
-
-    // Add separator between days (but not after the last one)
-    if (index < dates.length - 1) {
-      markdown += '\n---\n\n';
-    }
-  });
-
-  const filename = dates.length === 1
-    ? `${startDate}.md`
-    : `${startDate}_to_${endDate}.md`;
-
-  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.send(markdown);
+  // TODO: Implement historical data retrieval
+  res.status(404).json({ error: 'No data available for this date range' });
 });
 
-// Download PDF for date range
+// Download PDF for date range (placeholder)
 app.post('/api/exports/download-range-pdf', async (req, res) => {
   const { startDate, endDate, token } = req.body;
 
@@ -1170,204 +994,8 @@ app.post('/api/exports/download-range-pdf', async (req, res) => {
     return res.status(400).json({ error: 'Start date and end date required' });
   }
 
-  try {
-    const user = users.find(u => u.id === userId);
-    const username = user ? user.username : null;
-    const userProfileFields = profileFields[userId] || {};
-
-    const userHistory = historicalData[userId] || {};
-    const dates = Object.keys(userHistory).filter(date => date >= startDate && date <= endDate).sort();
-
-    if (dates.length === 0) {
-      return res.status(404).json({ error: 'No data available for this date range' });
-    }
-
-    // Generate combined PDF with all days
-    const pdfBuffer = await new Promise((resolve, reject) => {
-      const doc = new PDFDocument({ size: 'A4', margin: 50 });
-      const buffers = [];
-
-      doc.on('data', buffers.push.bind(buffers));
-      doc.on('end', () => resolve(Buffer.concat(buffers)));
-      doc.on('error', reject);
-
-      dates.forEach((date, index) => {
-        const dayData = userHistory[date];
-
-        // Add page break between days (but not before the first day)
-        if (index > 0) {
-          doc.addPage();
-        }
-
-        // Header with purple background
-        doc.rect(0, 0, doc.page.width, 100).fillAndStroke('#6B46C1', '#6B46C1');
-        doc.fillColor('#FFFFFF')
-           .fontSize(24)
-           .text('DAILY JOURNAL REPORT', 50, 30, { align: 'center' });
-        doc.fontSize(14)
-           .text(formatDate(dayData.date), 50, 60, { align: 'center' });
-
-        // Move cursor down after header
-        doc.fillColor('#000000');
-        doc.y = 120;
-        doc.moveDown(1);
-
-        // User Information Section
-        if (username) {
-          doc.fontSize(16).fillColor('#6B46C1').text('USER INFORMATION', { underline: true });
-          doc.fontSize(12).fillColor('#000000').text(`Username: ${username}`);
-          doc.moveDown();
-        }
-
-        // Profile Fields Section
-        if (userProfileFields && Object.keys(userProfileFields).length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('PROFILE', { underline: true });
-          for (const [key, value] of Object.entries(userProfileFields)) {
-            const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
-            doc.fontSize(12).fillColor('#000000').text(`${capitalizedKey}: ${value}`);
-          }
-          doc.moveDown();
-        }
-
-        // Sleep Metrics
-        if (dayData.previousBedtime || dayData.wakeTime) {
-          doc.fontSize(16).fillColor('#6B46C1').text('SLEEP METRICS', { underline: true });
-          if (dayData.previousBedtime) doc.fontSize(12).fillColor('#000000').text(`Bedtime: ${dayData.previousBedtime}`);
-          if (dayData.wakeTime) doc.fontSize(12).fillColor('#000000').text(`Wake Time: ${dayData.wakeTime}`);
-          doc.moveDown();
-        }
-
-        // Time Since Trackers
-        if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('TIME SINCE TRACKERS', { underline: true });
-          dayData.timeSinceTrackers.forEach(t => {
-            const timeSince = calculateTimeSince(t.date);
-            doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)} (${timeSince})`);
-          });
-          doc.moveDown();
-        }
-
-        // Duration Trackers
-        if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('DURATION TRACKERS', { underline: true });
-          dayData.durationTrackers.forEach(t => {
-            if (t.type === 'timer') {
-              const storedValue = formatDuration(t.value);
-              if (t.isRunning && t.startTime) {
-                const currentElapsed = getCurrentElapsedTime(t);
-                const currentValue = formatDuration(currentElapsed);
-                doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${currentValue} [RUNNING - stored: ${storedValue}]`);
-              } else {
-                doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${storedValue}`);
-              }
-            } else {
-              doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${t.value} minutes`);
-            }
-          });
-          doc.moveDown();
-        }
-
-        // Custom Counters
-        if (dayData.customCounters && dayData.customCounters.length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('CUSTOM COUNTERS', { underline: true });
-          dayData.customCounters.forEach(c => {
-            doc.fontSize(12).fillColor('#000000').text(`• ${c.name}: ${c.value}`);
-          });
-          doc.moveDown();
-        }
-
-        // Template Fields
-        if (dayData.customFields && dayData.customFields.length > 0) {
-          const filledFields = dayData.customFields.filter(f => f.value);
-          if (filledFields.length > 0) {
-            doc.fontSize(16).fillColor('#6B46C1').text('TEMPLATE FIELDS', { underline: true });
-            filledFields.forEach(f => {
-              const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
-              doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
-            });
-            doc.moveDown();
-          }
-        }
-
-        // Daily Custom Fields
-        if (dayData.dailyCustomFields && dayData.dailyCustomFields.length > 0) {
-          const filledFields = dayData.dailyCustomFields.filter(f => f.value);
-          if (filledFields.length > 0) {
-            doc.fontSize(16).fillColor('#6B46C1').text('DAILY FIELDS', { underline: true });
-            filledFields.forEach(f => {
-              const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
-              doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
-            });
-            doc.moveDown();
-          }
-        }
-
-        // Daily Tasks
-        if (dayData.dailyTasks && dayData.dailyTasks.length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('DAILY TASKS', { underline: true });
-          dayData.dailyTasks.forEach(t => {
-            const check = t.completed ? '✓' : '○';
-            doc.fontSize(12).fillColor('#000000').text(`${check} ${t.text}`);
-          });
-          doc.moveDown();
-        }
-
-        // Activity Entries
-        if (dayData.entries && dayData.entries.length > 0) {
-          doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
-          dayData.entries.forEach(e => {
-            // Check if we need a new page
-            if (doc.y > doc.page.height - 150) {
-              doc.addPage();
-            }
-
-            doc.strokeColor('#CCCCCC').moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
-            doc.moveDown(0.5);
-            doc.fontSize(11).fillColor('#6B46C1').text(e.timestamp, { continued: false });
-            doc.fontSize(12).fillColor('#000000').text(e.text, { align: 'left' });
-
-            // Handle images (base64 embedded images)
-            if (e.image) {
-              try {
-                const base64Data = e.image.split(',')[1] || e.image;
-                const imageBuffer = Buffer.from(base64Data, 'base64');
-
-                if (doc.y > doc.page.height - 250) {
-                  doc.addPage();
-                }
-
-                doc.moveDown(0.5);
-                doc.image(imageBuffer, 50, doc.y, { width: 400, fit: [400, 300] });
-                doc.moveDown(10);
-              } catch (imageError) {
-                console.error('Error embedding image in PDF:', imageError);
-                doc.fontSize(10).fillColor('#999999').text('[Image could not be embedded]');
-              }
-            }
-
-            doc.moveDown();
-          });
-        } else {
-          doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
-          doc.fontSize(12).fillColor('#999999').text('No entries today', { italic: true });
-          doc.moveDown();
-        }
-      });
-
-      doc.end();
-    });
-
-    const filename = dates.length === 1
-      ? `${startDate}.pdf`
-      : `${startDate}_to_${endDate}.pdf`;
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-    res.send(pdfBuffer);
-  } catch (error) {
-    console.error('Error generating PDF:', error);
-    res.status(500).json({ error: 'Failed to generate PDF', details: error.message });
-  }
+  // TODO: Implement historical data retrieval
+  res.status(404).json({ error: 'No data available for this date range' });
 });
 
 // Tracker endpoints
@@ -1375,19 +1003,10 @@ app.post('/api/trackers/time-since', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const { name, date } = req.body;
 
+  // Create tracker in database
+  dataAccess.createTimeSinceTracker(userId, name, date);
+
   const state = getUserState(userId);
-
-  const newTracker = {
-    id: nextId++,
-    name: name,
-    date: date
-  };
-
-  state.timeSinceTrackers.push(newTracker);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1395,12 +1014,10 @@ app.delete('/api/trackers/time-since/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Delete from database
+  dataAccess.deleteTimeSinceTracker(id);
+
   const state = getUserState(userId);
-  state.timeSinceTrackers = state.timeSinceTrackers.filter(t => t.id !== id);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1408,23 +1025,10 @@ app.post('/api/trackers/duration', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const { name } = req.body;
 
+  // Create tracker in database
+  dataAccess.createDurationTracker(userId, name);
+
   const state = getUserState(userId);
-
-  const newTracker = {
-    id: nextId++,
-    name: name,
-    type: 'timer', // Always create as timer
-    value: 0,
-    isRunning: false,
-    startTime: null,
-    elapsedMs: 0  // Initialize elapsed milliseconds for timer
-  };
-
-  state.durationTrackers.push(newTracker);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1432,12 +1036,10 @@ app.delete('/api/trackers/duration/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Delete from database
+  dataAccess.deleteDurationTracker(id);
+
   const state = getUserState(userId);
-  state.durationTrackers = state.durationTrackers.filter(t => t.id !== id);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1446,27 +1048,16 @@ app.post('/api/trackers/manual-time', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const { trackerId, startTime, elapsedMs } = req.body;
 
-  const state = getUserState(userId);
-
-  // Find tracker
-  const tracker = state.durationTrackers.find(t => t.id === parseInt(trackerId));
-  if (!tracker) {
-    return res.status(404).json({ error: 'Tracker not found' });
-  }
-
-  if (tracker.type !== 'timer') {
-    return res.status(400).json({ error: 'Manual time only works with timer trackers' });
-  }
-
-  // Update tracker with manual time
-  tracker.startTime = startTime;
-  tracker.elapsedMs = elapsedMs;
-  tracker.isRunning = false;
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
+  // Update tracker in database
+  dataAccess.updateDurationTracker(parseInt(trackerId), {
+    startTime: startTime,
+    elapsedMs: elapsedMs,
+    isRunning: false
+  });
 
   console.log(`Set manual time for tracker ${trackerId}: ${elapsedMs}ms`);
+
+  const state = getUserState(userId);
   res.json(state);
 });
 
@@ -1474,17 +1065,13 @@ app.post('/api/trackers/timer/start/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Update tracker in database
+  dataAccess.updateDurationTracker(id, {
+    isRunning: true,
+    startTime: Date.now()
+  });
+
   const state = getUserState(userId);
-  const tracker = state.durationTrackers.find(t => t.id === id);
-
-  if (tracker && tracker.type === 'timer') {
-    tracker.isRunning = true;
-    tracker.startTime = Date.now();
-  }
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1492,20 +1079,24 @@ app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
-  const state = getUserState(userId);
-  const tracker = state.durationTrackers.find(t => t.id === id);
+  // Get current tracker state
+  const trackers = dataAccess.getDurationTrackers(userId);
+  const tracker = trackers.find(t => t.id === id);
 
   if (tracker && tracker.type === 'timer' && tracker.isRunning) {
     const elapsed = Date.now() - tracker.startTime;
-    tracker.elapsedMs += elapsed; // Add to elapsedMs for consistent display
-    tracker.value = Math.floor(tracker.elapsedMs / 1000); // Update value in seconds
-    tracker.isRunning = false;
-    tracker.startTime = null;
+    const newElapsedMs = tracker.elapsedMs + elapsed;
+    const newValue = Math.floor(newElapsedMs / 1000);
+
+    dataAccess.updateDurationTracker(id, {
+      elapsedMs: newElapsedMs,
+      value: newValue,
+      isRunning: false,
+      startTime: null
+    });
   }
 
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
+  const state = getUserState(userId);
   res.json(state);
 });
 
@@ -1513,19 +1104,15 @@ app.post('/api/trackers/timer/reset/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Reset tracker in database
+  dataAccess.updateDurationTracker(id, {
+    value: 0,
+    isRunning: false,
+    startTime: null,
+    elapsedMs: 0
+  });
+
   const state = getUserState(userId);
-  const tracker = state.durationTrackers.find(t => t.id === id);
-
-  if (tracker && tracker.type === 'timer') {
-    tracker.value = 0;
-    tracker.isRunning = false;
-    tracker.startTime = null;
-    tracker.elapsedMs = 0;
-  }
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1538,53 +1125,38 @@ app.post('/api/custom-counters/create', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Counter name is required' });
   }
 
+  // Create counter in database
+  dataAccess.createCustomCounter(userId, name);
+
   const state = getUserState(userId);
-
-  const newCounter = {
-    id: nextId++,
-    name,
-    value: 0
-  };
-
-  state.customCounters.push(newCounter);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
 app.post('/api/custom-counters/:id/increment', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Get current value and increment
+  const currentValue = dataAccess.getCustomCounterValue(id, currentDate);
+  dataAccess.setCustomCounterValue(id, userId, currentDate, currentValue + 1);
 
   const state = getUserState(userId);
-  const counter = state.customCounters.find(c => c.id === id);
-
-  if (counter) {
-    counter.value += 1;
-  }
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
 app.post('/api/custom-counters/:id/decrement', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
+  const currentDate = new Date().toISOString().slice(0, 10);
 
-  const state = getUserState(userId);
-  const counter = state.customCounters.find(c => c.id === id);
-
-  if (counter && counter.value > 0) {
-    counter.value -= 1;
+  // Get current value and decrement (don't go below 0)
+  const currentValue = dataAccess.getCustomCounterValue(id, currentDate);
+  if (currentValue > 0) {
+    dataAccess.setCustomCounterValue(id, userId, currentDate, currentValue - 1);
   }
 
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
+  const state = getUserState(userId);
   res.json(state);
 });
 
@@ -1592,17 +1164,13 @@ app.put('/api/custom-counters/:id/set', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
   const { value } = req.body;
+  const currentDate = new Date().toISOString().slice(0, 10);
 
-  const state = getUserState(userId);
-  const counter = state.customCounters.find(c => c.id === id);
-
-  if (counter && typeof value === 'number' && value >= 0) {
-    counter.value = value;
+  if (typeof value === 'number' && value >= 0) {
+    dataAccess.setCustomCounterValue(id, userId, currentDate, value);
   }
 
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
+  const state = getUserState(userId);
   res.json(state);
 });
 
@@ -1610,12 +1178,10 @@ app.delete('/api/custom-counters/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Delete from database
+  dataAccess.deleteCustomCounter(id);
+
   const state = getUserState(userId);
-  state.customCounters = state.customCounters.filter(c => c.id !== id);
-
-  // Save to persistent storage
-  saveTrackersToPersistent(userId);
-
   res.json(state);
 });
 
@@ -1628,21 +1194,12 @@ app.post('/api/daily-custom-fields', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Field key is required' });
   }
 
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Set daily custom field in database (isTemplate = false)
+  dataAccess.setDailyCustomField(userId, currentDate, key, value || '', false);
+
   const state = getUserState(userId);
-
-  // Check if field already exists
-  const existingField = state.dailyCustomFields.find(f => f.key === key);
-
-  if (existingField) {
-    existingField.value = value;
-  } else {
-    state.dailyCustomFields.push({
-      id: nextId++,
-      key,
-      value: value || ''
-    });
-  }
-
   res.json(state);
 });
 
@@ -1650,8 +1207,10 @@ app.delete('/api/daily-custom-fields/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Delete from database
+  dataAccess.deleteDailyCustomFieldById(id);
+
   const state = getUserState(userId);
-  state.dailyCustomFields = state.dailyCustomFields.filter(f => f.id !== id);
   res.json(state);
 });
 
@@ -1664,14 +1223,12 @@ app.post('/api/daily-tasks', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Task text is required' });
   }
 
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Create task in database
+  dataAccess.createDailyTask(userId, currentDate, text);
+
   const state = getUserState(userId);
-
-  state.dailyTasks.push({
-    id: nextId++,
-    text,
-    completed: false
-  });
-
   res.json(state);
 });
 
@@ -1679,13 +1236,10 @@ app.put('/api/daily-tasks/:id/toggle', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Toggle task in database
+  dataAccess.toggleDailyTask(id);
+
   const state = getUserState(userId);
-  const task = state.dailyTasks.find(t => t.id === id);
-
-  if (task) {
-    task.completed = !task.completed;
-  }
-
   res.json(state);
 });
 
@@ -1693,8 +1247,10 @@ app.delete('/api/daily-tasks/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
+  // Delete from database
+  dataAccess.deleteDailyTask(id);
+
   const state = getUserState(userId);
-  state.dailyTasks = state.dailyTasks.filter(t => t.id !== id);
   res.json(state);
 });
 
@@ -1707,66 +1263,53 @@ app.post('/api/custom-field-templates/create', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'Field key is required' });
   }
 
-  // Initialize user's templates if not exists
-  if (!customFieldTemplates[userId]) {
-    customFieldTemplates[userId] = [];
-  }
-
   // Check if template already exists for this user
-  if (customFieldTemplates[userId].find(t => t.key === key)) {
+  const existingTemplates = dataAccess.getCustomFieldTemplates(userId);
+  if (existingTemplates.find(t => t.key === key)) {
     return res.status(400).json({ error: 'Template already exists' });
   }
 
-  customFieldTemplates[userId].push({
-    id: nextId++,
-    key
-  });
-
-  const state = getUserState(userId);
+  // Create template in database
+  const templateId = dataAccess.createCustomFieldTemplate(userId, key);
 
   // Add to current day's custom fields with empty value
-  state.customFields.push({
-    id: nextId++,
-    key,
-    value: ''
-  });
+  const currentDate = new Date().toISOString().slice(0, 10);
+  dataAccess.setDailyCustomField(userId, currentDate, key, '', true);
 
-  res.json({ templates: customFieldTemplates[userId], state });
+  const templates = dataAccess.getCustomFieldTemplates(userId);
+  const state = getUserState(userId);
+  res.json({ templates, state });
 });
 
 app.get('/api/custom-field-templates', authMiddleware, (req, res) => {
   const userId = req.user.id;
-  const userTemplates = customFieldTemplates[userId] || [];
-  res.json({ templates: userTemplates });
+  const templates = dataAccess.getCustomFieldTemplates(userId);
+  res.json({ templates });
 });
 
 app.delete('/api/custom-field-templates/:id', authMiddleware, (req, res) => {
   const userId = req.user.id;
   const id = parseInt(req.params.id);
 
-  if (!customFieldTemplates[userId]) {
-    customFieldTemplates[userId] = [];
-  }
-
   const state = getUserState(userId);
 
-  // First find the custom field by its ID to get the key
+  // Find the custom field by its ID to get the key
   const customField = state.customFields.find(f => f.id === id);
 
   if (customField) {
     const key = customField.key;
 
-    // Remove template by key
-    const templateIndex = customFieldTemplates[userId].findIndex(t => t.key === key);
-    if (templateIndex !== -1) {
-      customFieldTemplates[userId].splice(templateIndex, 1);
-    }
+    // Remove template from database
+    dataAccess.deleteCustomFieldTemplate(userId, key);
 
     // Remove from current day's custom fields
-    state.customFields = state.customFields.filter(f => f.id !== id);
+    const currentDate = new Date().toISOString().slice(0, 10);
+    dataAccess.deleteDailyCustomField(userId, currentDate, key);
   }
 
-  res.json({ templates: customFieldTemplates[userId], state: getUserState(userId) });
+  const templates = dataAccess.getCustomFieldTemplates(userId);
+  const updatedState = getUserState(userId);
+  res.json({ templates, state: updatedState });
 });
 
 // Update template-based custom field value (updates current day only)
@@ -1775,13 +1318,12 @@ app.put('/api/custom-fields/:key', authMiddleware, (req, res) => {
   const { key } = req.params;
   const { value } = req.body;
 
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  // Update field value in database
+  dataAccess.setDailyCustomField(userId, currentDate, key, value, true);
+
   const state = getUserState(userId);
-  const field = state.customFields.find(f => f.key === key);
-
-  if (field) {
-    field.value = value;
-  }
-
   res.json(state);
 });
 
@@ -1796,9 +1338,11 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`=== SERVER WORKING ===`);
   console.log(`✅ Server running on port ${PORT}`);
-  console.log(`✅ Admin login: admin / admin123`);
-  console.log(`✅ Admin user ID: 1`);
-  console.log(`✅ All admin features enabled`);
+  console.log(`✅ Database persistence enabled`);
+
+  // Initialize default admin user after server starts
+  initializeDefaultAdmin();
+
   console.log(`=== TEST INSTRUCTIONS ===`);
   console.log(`1. Visit: http://localhost:${PORT}`);
   console.log(`2. Login: admin / admin123`);
