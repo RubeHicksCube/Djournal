@@ -7,7 +7,7 @@ A simple, self-hosted daily journal application for logging activities minute-by
 - **Health Metrics Tracking**: Sleep, heart rate, alcohol consumption, exercise, mood, energy, and stress levels
 - **Daily Journaling**: Markdown-based journal entries with automatic date organization
 - **User Management**: Built-in authentication with admin controls for multi-user support
-- **Data Export**: Export your data as Markdown files for backup and analysis
+- **Data Export**: Export your data as Markdown or PDF files for backup and analysis
 - **Responsive Design**: Works seamlessly on desktop and mobile devices
 - **Docker Ready**: Easy deployment with Docker Compose
 
@@ -109,7 +109,7 @@ When using Docker Compose, data is stored in named volumes:
 
 1. **Login**: Use the default admin credentials (`admin` / `admin123`)
 2. **Profile**: Navigate to Profile → Update your password and preferences
-3. **Start Tracking**: Use the Home page to track daily activities
+3. **Start Tracking**: Use the Home page to track daily activities, moods, tasks, etc.
 4. **Journal**: Add journal entries for reflection and documentation
 
 ### Tracking Features
