@@ -1748,17 +1748,22 @@ app.delete('/api/custom-field-templates/:id', authMiddleware, (req, res) => {
     customFieldTemplates[userId] = [];
   }
 
-  const template = customFieldTemplates[userId].find(t => t.id === id);
+  const state = getUserState(userId);
 
-  if (template) {
-    // Remove template
-    const index = customFieldTemplates[userId].findIndex(t => t.id === id);
-    customFieldTemplates[userId].splice(index, 1);
+  // First find the custom field by its ID to get the key
+  const customField = state.customFields.find(f => f.id === id);
 
-    const state = getUserState(userId);
+  if (customField) {
+    const key = customField.key;
+
+    // Remove template by key
+    const templateIndex = customFieldTemplates[userId].findIndex(t => t.key === key);
+    if (templateIndex !== -1) {
+      customFieldTemplates[userId].splice(templateIndex, 1);
+    }
 
     // Remove from current day's custom fields
-    state.customFields = state.customFields.filter(f => f.key !== template.key);
+    state.customFields = state.customFields.filter(f => f.id !== id);
   }
 
   res.json({ templates: customFieldTemplates[userId], state: getUserState(userId) });
