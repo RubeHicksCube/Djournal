@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { api } from '../services/api';
 import { format } from 'date-fns';
 
@@ -18,6 +18,9 @@ export default function Home() {
 
   // Daily custom field form (non-persistent)
   const [dailyFieldKey, setDailyFieldKey] = useState('');
+
+  // Debounce timer for template field updates
+  const debounceTimers = useRef({});
   const [dailyFieldValue, setDailyFieldValue] = useState('');
 
   // Daily task form
@@ -132,13 +135,29 @@ export default function Home() {
     }
   };
 
-  const handleUpdateTemplateFieldValue = async (key, value) => {
-    try {
-      const data = await api.updateCustomFieldValue(key, value);
-      setState(data);
-    } catch (error) {
-      console.error('Error updating field value:', error);
+  const handleUpdateTemplateFieldValue = (key, value) => {
+    // Update local state immediately for responsive UI
+    setState(prev => ({
+      ...prev,
+      customFields: prev.customFields.map(f =>
+        f.key === key ? { ...f, value } : f
+      )
+    }));
+
+    // Debounce the API call
+    if (debounceTimers.current[key]) {
+      clearTimeout(debounceTimers.current[key]);
     }
+
+    debounceTimers.current[key] = setTimeout(async () => {
+      try {
+        await api.updateCustomFieldValue(key, value);
+      } catch (error) {
+        console.error('Error updating field value:', error);
+        // Reload state on error to show correct value
+        loadState();
+      }
+    }, 500); // Wait 500ms after user stops typing
   };
 
   const handleDeleteTemplateField = async (id) => {
@@ -233,7 +252,8 @@ export default function Home() {
                 type="time"
                 className="form-input"
                 value={state.previousBedtime || ''}
-                onChange={(e) => updateDaily('previousBedtime', e.target.value)}
+                onBlur={(e) => updateDaily('previousBedtime', e.target.value)}
+                onChange={(e) => setState(prev => ({ ...prev, previousBedtime: e.target.value }))}
               />
             </div>
 
@@ -243,7 +263,8 @@ export default function Home() {
                 type="time"
                 className="form-input"
                 value={state.wakeTime || ''}
-                onChange={(e) => updateDaily('wakeTime', e.target.value)}
+                onBlur={(e) => updateDaily('wakeTime', e.target.value)}
+                onChange={(e) => setState(prev => ({ ...prev, wakeTime: e.target.value }))}
               />
             </div>
           </div>

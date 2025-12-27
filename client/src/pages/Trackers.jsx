@@ -185,9 +185,19 @@ const calculateDaysSince = (date) => {
   const calculateElapsedTime = (tracker) => {
     if (tracker.type !== 'timer') return null;
 
-    let elapsedMs = tracker.elapsedMs || 0;
+    let elapsedMs = 0;
+
+    // Add stored elapsed time
+    if (tracker.elapsedMs) {
+      elapsedMs = tracker.elapsedMs;
+    }
+
+    // Add current running time if timer is active
     if (tracker.isRunning && tracker.startTime) {
-      elapsedMs += Date.now() - new Date(tracker.startTime).getTime();
+      const startTimeMs = new Date(tracker.startTime).getTime();
+      if (!isNaN(startTimeMs)) {
+        elapsedMs += Date.now() - startTimeMs;
+      }
     }
 
     const totalSeconds = Math.floor(elapsedMs / 1000);
