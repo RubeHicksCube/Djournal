@@ -34,22 +34,33 @@ app.use(express.urlencoded({ extended: true, limit: '30mb' }));
 // Mock database - single admin user
 users.push(defaultAdmin);
 
-// Mock state storage (in-memory)
-const dailyState = {
-  date: new Date().toISOString().slice(0, 10),
-  previousBedtime: '',
-  wakeTime: '',
-  customFields: [],           // Template-based custom fields (persist name, reset value daily)
-  dailyCustomFields: [],      // Non-persistent custom fields (don't carry over to new dates)
-  dailyTasks: [],             // Daily to-do tasks
-  customCounters: [],         // Custom counters (e.g., water, coffee, calories)
-  entries: [],
-  timeSinceTrackers: [],
-  durationTrackers: []
-};
+// Mock state storage (in-memory) - per user
+const userStates = {}; // { userId: dailyState }
 
-// Custom field templates (persist across dates, but values reset)
-const customFieldTemplates = [];
+// Custom field templates (persist across dates, but values reset) - per user
+const customFieldTemplates = {}; // { userId: [...templates] }
+
+// Helper function to get or initialize user state
+function getUserState(userId) {
+  if (!userStates[userId]) {
+    userStates[userId] = {
+      date: new Date().toISOString().slice(0, 10),
+      previousBedtime: '',
+      wakeTime: '',
+      customFields: [],           // Template-based custom fields (persist name, reset value daily)
+      dailyCustomFields: [],      // Non-persistent custom fields (don't carry over to new dates)
+      dailyTasks: [],             // Daily to-do tasks
+      customCounters: [],         // Custom counters (e.g., water, coffee, calories)
+      entries: [],
+      timeSinceTrackers: [],
+      durationTrackers: []
+    };
+
+    // Load persistent trackers for this user
+    loadTrackersIntoState(userId);
+  }
+  return userStates[userId];
+}
 
 // Historical data storage: { userId: { 'YYYY-MM-DD': {...dailyData} } }
 const historicalData = {};
@@ -80,16 +91,17 @@ function initializePersistentTrackers(userId) {
 function loadTrackersIntoState(userId) {
   initializePersistentTrackers(userId);
 
+  const state = getUserState(userId);
   const userTrackers = persistentTrackers[userId];
 
   // Load time since trackers (persist as-is)
-  dailyState.timeSinceTrackers = [...userTrackers.timeSinceTrackers];
+  state.timeSinceTrackers = [...userTrackers.timeSinceTrackers];
 
   // Load duration trackers (persist as-is)
-  dailyState.durationTrackers = [...userTrackers.durationTrackers];
+  state.durationTrackers = [...userTrackers.durationTrackers];
 
   // Load custom counters (persist structure, but reset values to 0 on new day)
-  dailyState.customCounters = userTrackers.customCounters.map(counter => ({
+  state.customCounters = userTrackers.customCounters.map(counter => ({
     ...counter,
     value: 0 // Reset value to 0 for new day
   }));
@@ -99,11 +111,13 @@ function loadTrackersIntoState(userId) {
 function saveTrackersToPersistent(userId) {
   initializePersistentTrackers(userId);
 
+  const state = getUserState(userId);
+
   // Save current state to persistent storage
   persistentTrackers[userId] = {
-    timeSinceTrackers: [...dailyState.timeSinceTrackers],
-    durationTrackers: [...dailyState.durationTrackers],
-    customCounters: dailyState.customCounters.map(counter => ({
+    timeSinceTrackers: [...state.timeSinceTrackers],
+    durationTrackers: [...state.durationTrackers],
+    customCounters: state.customCounters.map(counter => ({
       ...counter
       // Note: We keep the current value in persistent storage
     }))
@@ -112,24 +126,28 @@ function saveTrackersToPersistent(userId) {
 
 // Helper function to check for date transition and handle accordingly
 function checkDateTransition(userId) {
+  const state = getUserState(userId);
   const currentDate = new Date().toISOString().slice(0, 10);
 
-  if (dailyState.date !== currentDate) {
-    console.log(`Date transition detected: ${dailyState.date} -> ${currentDate}`);
+  if (state.date !== currentDate) {
+    console.log(`Date transition detected for user ${userId}: ${state.date} -> ${currentDate}`);
 
     // Save old state to history
     saveDailySnapshot(userId);
 
     // Update to new date
-    dailyState.date = currentDate;
+    state.date = currentDate;
 
     // Reset daily fields
-    dailyState.previousBedtime = '';
-    dailyState.wakeTime = '';
-    dailyState.customFields = customFieldTemplates.map(t => ({ ...t, value: '' }));
-    dailyState.dailyCustomFields = [];
-    dailyState.dailyTasks = [];
-    dailyState.entries = [];
+    state.previousBedtime = '';
+    state.wakeTime = '';
+
+    // Get user's custom field templates
+    const userTemplates = customFieldTemplates[userId] || [];
+    state.customFields = userTemplates.map(t => ({ ...t, value: '' }));
+    state.dailyCustomFields = [];
+    state.dailyTasks = [];
+    state.entries = [];
 
     // Load persistent trackers and reset counter values
     loadTrackersIntoState(userId);
@@ -172,14 +190,15 @@ function cleanupOldSnapshots(userId) {
 
 // Helper function to save current state to history
 function saveDailySnapshot(userId) {
-  const date = dailyState.date;
+  const state = getUserState(userId);
+  const date = state.date;
 
   if (!historicalData[userId]) {
     historicalData[userId] = {};
   }
 
   // Deep clone the current state
-  historicalData[userId][date] = JSON.parse(JSON.stringify(dailyState));
+  historicalData[userId][date] = JSON.parse(JSON.stringify(state));
 
   console.log(`Saved snapshot for user ${userId} on ${date}`);
 
@@ -857,26 +876,33 @@ app.delete('/api/users/:id', authMiddleware, (req, res) => {
 
 // Get current state (Home page data)
 app.get('/api/state', authMiddleware, (req, res) => {
-  // Check for date transition and handle tracker persistence
-  checkDateTransition(req.user.id);
+  const userId = req.user.id;
 
-  res.json(dailyState);
+  // Check for date transition and handle tracker persistence
+  checkDateTransition(userId);
+
+  const state = getUserState(userId);
+  res.json(state);
 });
 
 // Update daily data
 app.post('/api/daily', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const data = req.body;
   console.log('Updating daily data:', data);
 
-  // Update state with provided data
-  if (data.previousBedtime !== undefined) dailyState.previousBedtime = data.previousBedtime;
-  if (data.wakeTime !== undefined) dailyState.wakeTime = data.wakeTime;
+  const state = getUserState(userId);
 
-  res.json(dailyState);
+  // Update state with provided data
+  if (data.previousBedtime !== undefined) state.previousBedtime = data.previousBedtime;
+  if (data.wakeTime !== undefined) state.wakeTime = data.wakeTime;
+
+  res.json(state);
 });
 
 // Add entry
 app.post('/api/entry', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { text, image } = req.body;
   console.log('Adding entry:', text, image ? '(with image)' : '');
 
@@ -890,6 +916,8 @@ app.post('/api/entry', authMiddleware, (req, res) => {
     }
   }
 
+  const state = getUserState(userId);
+
   const newEntry = {
     id: nextId++,
     timestamp: new Date().toLocaleTimeString('en-US', { hour12: false }),
@@ -897,8 +925,8 @@ app.post('/api/entry', authMiddleware, (req, res) => {
     image: image || null // base64 encoded image data
   };
 
-  dailyState.entries.push(newEntry);
-  res.json(dailyState);
+  state.entries.push(newEntry);
+  res.json(state);
 });
 
 // Download markdown (current day)
@@ -917,18 +945,24 @@ app.get('/api/download', (req, res) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
+  const userId = decoded.id;
+
+  // Check for date transition before export
+  checkDateTransition(userId);
+
   // Auto-save snapshot before export
-  saveDailySnapshot(decoded.id);
+  saveDailySnapshot(userId);
 
   // Get user info and profile fields
-  const user = users.find(u => u.id === decoded.id);
+  const user = users.find(u => u.id === userId);
   const username = user ? user.username : null;
-  const userProfileFields = profileFields[decoded.id] || {};
+  const userProfileFields = profileFields[userId] || {};
 
-  const markdown = generateMarkdownWithYAML(dailyState, username, userProfileFields);
+  const state = getUserState(userId);
+  const markdown = generateMarkdownWithYAML(state, username, userProfileFields);
 
   res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
-  res.setHeader('Content-Disposition', `attachment; filename="${dailyState.date}.md"`);
+  res.setHeader('Content-Disposition', `attachment; filename="${state.date}.md"`);
   res.send(markdown);
 });
 
@@ -947,20 +981,23 @@ app.get('/api/download-pdf', async (req, res) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
+  const userId = decoded.id;
+
   try {
-    checkDateTransition(decoded.id);
+    checkDateTransition(userId);
 
     // Auto-save snapshot before export
-    saveDailySnapshot(decoded.id);
+    saveDailySnapshot(userId);
 
-    const user = users.find(u => u.id === decoded.id);
+    const user = users.find(u => u.id === userId);
     const username = user ? user.username : null;
-    const userProfileFields = profileFields[decoded.id] || {};
+    const userProfileFields = profileFields[userId] || {};
 
-    const pdfBuffer = await generatePDFReport(dailyState, username, userProfileFields);
+    const state = getUserState(userId);
+    const pdfBuffer = await generatePDFReport(state, username, userProfileFields);
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${dailyState.date}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${state.date}.pdf"`);
     res.send(pdfBuffer);
   } catch (error) {
     console.error('Error generating PDF:', error);
@@ -970,8 +1007,11 @@ app.get('/api/download-pdf', async (req, res) => {
 
 // Save daily snapshot
 app.post('/api/exports/save-snapshot', authMiddleware, (req, res) => {
-  saveDailySnapshot(req.user.id);
-  res.json({ success: true, date: dailyState.date });
+  const userId = req.user.id;
+  saveDailySnapshot(userId);
+
+  const state = getUserState(userId);
+  res.json({ success: true, date: state.date });
 });
 
 // Get available export dates for current user
@@ -1332,7 +1372,10 @@ app.post('/api/exports/download-range-pdf', async (req, res) => {
 
 // Tracker endpoints
 app.post('/api/trackers/time-since', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { name, date } = req.body;
+
+  const state = getUserState(userId);
 
   const newTracker = {
     id: nextId++,
@@ -1340,26 +1383,32 @@ app.post('/api/trackers/time-since', authMiddleware, (req, res) => {
     date: date
   };
 
-  dailyState.timeSinceTrackers.push(newTracker);
+  state.timeSinceTrackers.push(newTracker);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.delete('/api/trackers/time-since/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  dailyState.timeSinceTrackers = dailyState.timeSinceTrackers.filter(t => t.id !== id);
+
+  const state = getUserState(userId);
+  state.timeSinceTrackers = state.timeSinceTrackers.filter(t => t.id !== id);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/trackers/duration', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { name } = req.body;
+
+  const state = getUserState(userId);
 
   const newTracker = {
     id: nextId++,
@@ -1371,30 +1420,36 @@ app.post('/api/trackers/duration', authMiddleware, (req, res) => {
     elapsedMs: 0  // Initialize elapsed milliseconds for timer
   };
 
-  dailyState.durationTrackers.push(newTracker);
+  state.durationTrackers.push(newTracker);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.delete('/api/trackers/duration/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  dailyState.durationTrackers = dailyState.durationTrackers.filter(t => t.id !== id);
+
+  const state = getUserState(userId);
+  state.durationTrackers = state.durationTrackers.filter(t => t.id !== id);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 // Set manual time for timer
 app.post('/api/trackers/manual-time', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { trackerId, startTime, elapsedMs } = req.body;
 
+  const state = getUserState(userId);
+
   // Find tracker
-  const tracker = dailyState.durationTrackers.find(t => t.id === parseInt(trackerId));
+  const tracker = state.durationTrackers.find(t => t.id === parseInt(trackerId));
   if (!tracker) {
     return res.status(404).json({ error: 'Tracker not found' });
   }
@@ -1409,15 +1464,18 @@ app.post('/api/trackers/manual-time', authMiddleware, (req, res) => {
   tracker.isRunning = false;
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
   console.log(`Set manual time for tracker ${trackerId}: ${elapsedMs}ms`);
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/trackers/timer/start/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const tracker = dailyState.durationTrackers.find(t => t.id === id);
+
+  const state = getUserState(userId);
+  const tracker = state.durationTrackers.find(t => t.id === id);
 
   if (tracker && tracker.type === 'timer') {
     tracker.isRunning = true;
@@ -1425,14 +1483,17 @@ app.post('/api/trackers/timer/start/:id', authMiddleware, (req, res) => {
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const tracker = dailyState.durationTrackers.find(t => t.id === id);
+
+  const state = getUserState(userId);
+  const tracker = state.durationTrackers.find(t => t.id === id);
 
   if (tracker && tracker.type === 'timer' && tracker.isRunning) {
     const elapsed = Date.now() - tracker.startTime;
@@ -1443,14 +1504,17 @@ app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/trackers/timer/reset/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const tracker = dailyState.durationTrackers.find(t => t.id === id);
+
+  const state = getUserState(userId);
+  const tracker = state.durationTrackers.find(t => t.id === id);
 
   if (tracker && tracker.type === 'timer') {
     tracker.value = 0;
@@ -1460,18 +1524,21 @@ app.post('/api/trackers/timer/reset/:id', authMiddleware, (req, res) => {
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 // Custom Counters (water, coffee, calories, etc.)
 app.post('/api/custom-counters/create', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { name } = req.body;
 
   if (!name) {
     return res.status(400).json({ error: 'Counter name is required' });
   }
+
+  const state = getUserState(userId);
 
   const newCounter = {
     id: nextId++,
@@ -1479,191 +1546,238 @@ app.post('/api/custom-counters/create', authMiddleware, (req, res) => {
     value: 0
   };
 
-  dailyState.customCounters.push(newCounter);
+  state.customCounters.push(newCounter);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/custom-counters/:id/increment', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const counter = dailyState.customCounters.find(c => c.id === id);
+
+  const state = getUserState(userId);
+  const counter = state.customCounters.find(c => c.id === id);
 
   if (counter) {
     counter.value += 1;
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.post('/api/custom-counters/:id/decrement', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const counter = dailyState.customCounters.find(c => c.id === id);
+
+  const state = getUserState(userId);
+  const counter = state.customCounters.find(c => c.id === id);
 
   if (counter && counter.value > 0) {
     counter.value -= 1;
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.put('/api/custom-counters/:id/set', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
   const { value } = req.body;
-  const counter = dailyState.customCounters.find(c => c.id === id);
+
+  const state = getUserState(userId);
+  const counter = state.customCounters.find(c => c.id === id);
 
   if (counter && typeof value === 'number' && value >= 0) {
     counter.value = value;
   }
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.delete('/api/custom-counters/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  dailyState.customCounters = dailyState.customCounters.filter(c => c.id !== id);
+
+  const state = getUserState(userId);
+  state.customCounters = state.customCounters.filter(c => c.id !== id);
 
   // Save to persistent storage
-  saveTrackersToPersistent(req.user.id);
+  saveTrackersToPersistent(userId);
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 // Daily Custom Fields (non-persistent, don't carry over to new dates)
 app.post('/api/daily-custom-fields', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { key, value } = req.body;
 
   if (!key) {
     return res.status(400).json({ error: 'Field key is required' });
   }
 
+  const state = getUserState(userId);
+
   // Check if field already exists
-  const existingField = dailyState.dailyCustomFields.find(f => f.key === key);
+  const existingField = state.dailyCustomFields.find(f => f.key === key);
 
   if (existingField) {
     existingField.value = value;
   } else {
-    dailyState.dailyCustomFields.push({
+    state.dailyCustomFields.push({
       id: nextId++,
       key,
       value: value || ''
     });
   }
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.delete('/api/daily-custom-fields/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  dailyState.dailyCustomFields = dailyState.dailyCustomFields.filter(f => f.id !== id);
-  res.json(dailyState);
+
+  const state = getUserState(userId);
+  state.dailyCustomFields = state.dailyCustomFields.filter(f => f.id !== id);
+  res.json(state);
 });
 
 // Daily Tasks
 app.post('/api/daily-tasks', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { text } = req.body;
 
   if (!text) {
     return res.status(400).json({ error: 'Task text is required' });
   }
 
-  dailyState.dailyTasks.push({
+  const state = getUserState(userId);
+
+  state.dailyTasks.push({
     id: nextId++,
     text,
     completed: false
   });
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.put('/api/daily-tasks/:id/toggle', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const task = dailyState.dailyTasks.find(t => t.id === id);
+
+  const state = getUserState(userId);
+  const task = state.dailyTasks.find(t => t.id === id);
 
   if (task) {
     task.completed = !task.completed;
   }
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 app.delete('/api/daily-tasks/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  dailyState.dailyTasks = dailyState.dailyTasks.filter(t => t.id !== id);
-  res.json(dailyState);
+
+  const state = getUserState(userId);
+  state.dailyTasks = state.dailyTasks.filter(t => t.id !== id);
+  res.json(state);
 });
 
 // Template Custom Fields (persist name, reset value daily)
 app.post('/api/custom-field-templates/create', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { key } = req.body;
 
   if (!key) {
     return res.status(400).json({ error: 'Field key is required' });
   }
 
-  // Check if template already exists
-  if (customFieldTemplates.find(t => t.key === key)) {
+  // Initialize user's templates if not exists
+  if (!customFieldTemplates[userId]) {
+    customFieldTemplates[userId] = [];
+  }
+
+  // Check if template already exists for this user
+  if (customFieldTemplates[userId].find(t => t.key === key)) {
     return res.status(400).json({ error: 'Template already exists' });
   }
 
-  customFieldTemplates.push({
+  customFieldTemplates[userId].push({
     id: nextId++,
     key
   });
 
+  const state = getUserState(userId);
+
   // Add to current day's custom fields with empty value
-  dailyState.customFields.push({
+  state.customFields.push({
     id: nextId++,
     key,
     value: ''
   });
 
-  res.json({ templates: customFieldTemplates, state: dailyState });
+  res.json({ templates: customFieldTemplates[userId], state });
 });
 
 app.get('/api/custom-field-templates', authMiddleware, (req, res) => {
-  res.json({ templates: customFieldTemplates });
+  const userId = req.user.id;
+  const userTemplates = customFieldTemplates[userId] || [];
+  res.json({ templates: userTemplates });
 });
 
 app.delete('/api/custom-field-templates/:id', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const id = parseInt(req.params.id);
-  const template = customFieldTemplates.find(t => t.id === id);
+
+  if (!customFieldTemplates[userId]) {
+    customFieldTemplates[userId] = [];
+  }
+
+  const template = customFieldTemplates[userId].find(t => t.id === id);
 
   if (template) {
     // Remove template
-    const index = customFieldTemplates.findIndex(t => t.id === id);
-    customFieldTemplates.splice(index, 1);
+    const index = customFieldTemplates[userId].findIndex(t => t.id === id);
+    customFieldTemplates[userId].splice(index, 1);
+
+    const state = getUserState(userId);
 
     // Remove from current day's custom fields
-    dailyState.customFields = dailyState.customFields.filter(f => f.key !== template.key);
+    state.customFields = state.customFields.filter(f => f.key !== template.key);
   }
 
-  res.json({ templates: customFieldTemplates, state: dailyState });
+  res.json({ templates: customFieldTemplates[userId], state: getUserState(userId) });
 });
 
 // Update template-based custom field value (updates current day only)
 app.put('/api/custom-fields/:key', authMiddleware, (req, res) => {
+  const userId = req.user.id;
   const { key } = req.params;
   const { value } = req.body;
 
-  const field = dailyState.customFields.find(f => f.key === key);
+  const state = getUserState(userId);
+  const field = state.customFields.find(f => f.key === key);
 
   if (field) {
     field.value = value;
   }
 
-  res.json(dailyState);
+  res.json(state);
 });
 
 // Serve static files
