@@ -2,9 +2,13 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install all dependencies for building
+# Install root dependencies
 COPY package*.json ./
 RUN npm ci
+
+# Install client dependencies
+COPY client/package*.json ./client/
+RUN cd client && npm ci
 
 # Copy source code
 COPY . .
