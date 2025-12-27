@@ -228,6 +228,7 @@ function generateMarkdownWithYAML(dayData, username = null, userProfileFields = 
     dayData.timeSinceTrackers.forEach(t => {
       yaml += `  - name: "${t.name.replace(/"/g, '\\"')}"\n`;
       yaml += `    date: "${t.date}"\n`;
+      yaml += `    time_since: "${calculateTimeSince(t.date)}"\n`;
     });
     yaml += '\n';
   }
@@ -243,10 +244,16 @@ function generateMarkdownWithYAML(dayData, username = null, userProfileFields = 
 
       // Add formatted value for better readability
       if (t.type === 'timer') {
-        const hours = Math.floor(t.value / 3600);
-        const minutes = Math.floor((t.value % 3600) / 60);
-        const seconds = t.value % 60;
-        yaml += `    formatted: "${hours}h ${minutes}m ${seconds}s"\n`;
+        yaml += `    formatted: "${formatDuration(t.value)}"\n`;
+
+        // If timer is running, show current elapsed time
+        if (t.isRunning && t.startTime) {
+          yaml += `    is_running: true\n`;
+          const currentElapsed = getCurrentElapsedTime(t);
+          yaml += `    current_time: "${formatDuration(currentElapsed)}"\n`;
+        } else {
+          yaml += `    is_running: false\n`;
+        }
       } else if (t.type === 'counter') {
         yaml += `    formatted: "${t.value} minutes"\n`;
       }
@@ -320,15 +327,66 @@ function generateMarkdownWithYAML(dayData, username = null, userProfileFields = 
   return yaml + content;
 }
 
-// Helper function to format duration for PDF
+// Helper function to calculate time since for exports (server-side)
+function calculateTimeSince(dateStr) {
+  const then = new Date(dateStr);
+  const now = new Date();
+  let diffMinutes = Math.floor((now - then) / (1000 * 60));
+
+  const years = Math.floor(diffMinutes / (365.25 * 24 * 60));
+  diffMinutes -= Math.floor(years * 365.25 * 24 * 60);
+
+  const months = Math.floor(diffMinutes / (30.44 * 24 * 60));
+  diffMinutes -= Math.floor(months * 30.44 * 24 * 60);
+
+  const weeks = Math.floor(diffMinutes / (7 * 24 * 60));
+  diffMinutes -= weeks * 7 * 24 * 60;
+
+  const days = Math.floor(diffMinutes / (24 * 60));
+  diffMinutes -= days * 24 * 60;
+
+  const hours = Math.floor(diffMinutes / 60);
+  diffMinutes -= hours * 60;
+
+  const minutes = diffMinutes;
+
+  const parts = [];
+  if (years > 0) parts.push(`${years}y`);
+  if (months > 0) parts.push(`${months}mo`);
+  if (weeks > 0) parts.push(`${weeks}w`);
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+
+  return parts.join(' ');
+}
+
+// Helper function to format duration for PDF and exports
 function formatDuration(seconds) {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
 
-  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
-  if (minutes > 0) return `${minutes}m ${secs}s`;
-  return `${secs}s`;
+  const parts = [];
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+  return parts.join(' ');
+}
+
+// Get current elapsed time for running timer
+function getCurrentElapsedTime(tracker) {
+  if (tracker.type !== 'timer') return tracker.value;
+
+  let totalSeconds = tracker.value || 0;
+
+  if (tracker.isRunning && tracker.startTime) {
+    const elapsed = Math.floor((Date.now() - tracker.startTime) / 1000);
+    totalSeconds += elapsed;
+  }
+
+  return totalSeconds;
 }
 
 // Helper function to format date for PDF
@@ -390,7 +448,8 @@ async function generatePDFReport(dayData, username = null, userProfileFields = n
     if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
       doc.fontSize(16).fillColor('#6B46C1').text('TIME SINCE TRACKERS', { underline: true });
       dayData.timeSinceTrackers.forEach(t => {
-        doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)}`);
+        const timeSince = calculateTimeSince(t.date);
+        doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)} (${timeSince})`);
       });
       doc.moveDown();
     }
@@ -399,8 +458,18 @@ async function generatePDFReport(dayData, username = null, userProfileFields = n
     if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
       doc.fontSize(16).fillColor('#6B46C1').text('DURATION TRACKERS', { underline: true });
       dayData.durationTrackers.forEach(t => {
-        const formatted = t.type === 'timer' ? formatDuration(t.value) : `${t.value} minutes`;
-        doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${formatted}`);
+        if (t.type === 'timer') {
+          const storedValue = formatDuration(t.value);
+          if (t.isRunning && t.startTime) {
+            const currentElapsed = getCurrentElapsedTime(t);
+            const currentValue = formatDuration(currentElapsed);
+            doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${currentValue} [RUNNING - stored: ${storedValue}]`);
+          } else {
+            doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${storedValue}`);
+          }
+        } else {
+          doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${t.value} minutes`);
+        }
       });
       doc.moveDown();
     }
@@ -848,6 +917,9 @@ app.get('/api/download', (req, res) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
+  // Auto-save snapshot before export
+  saveDailySnapshot(decoded.id);
+
   // Get user info and profile fields
   const user = users.find(u => u.id === decoded.id);
   const username = user ? user.username : null;
@@ -877,6 +949,9 @@ app.get('/api/download-pdf', async (req, res) => {
 
   try {
     checkDateTransition(decoded.id);
+
+    // Auto-save snapshot before export
+    saveDailySnapshot(decoded.id);
 
     const user = users.find(u => u.id === decoded.id);
     const username = user ? user.username : null;
@@ -1126,7 +1201,8 @@ app.post('/api/exports/download-range-pdf', async (req, res) => {
         if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
           doc.fontSize(16).fillColor('#6B46C1').text('TIME SINCE TRACKERS', { underline: true });
           dayData.timeSinceTrackers.forEach(t => {
-            doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)}`);
+            const timeSince = calculateTimeSince(t.date);
+            doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)} (${timeSince})`);
           });
           doc.moveDown();
         }
@@ -1135,8 +1211,18 @@ app.post('/api/exports/download-range-pdf', async (req, res) => {
         if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
           doc.fontSize(16).fillColor('#6B46C1').text('DURATION TRACKERS', { underline: true });
           dayData.durationTrackers.forEach(t => {
-            const formatted = t.type === 'timer' ? formatDuration(t.value) : `${t.value} minutes`;
-            doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${formatted}`);
+            if (t.type === 'timer') {
+              const storedValue = formatDuration(t.value);
+              if (t.isRunning && t.startTime) {
+                const currentElapsed = getCurrentElapsedTime(t);
+                const currentValue = formatDuration(currentElapsed);
+                doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${currentValue} [RUNNING - stored: ${storedValue}]`);
+              } else {
+                doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (timer): ${storedValue}`);
+              }
+            } else {
+              doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${t.value} minutes`);
+            }
           });
           doc.moveDown();
         }
@@ -1350,7 +1436,8 @@ app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
 
   if (tracker && tracker.type === 'timer' && tracker.isRunning) {
     const elapsed = Date.now() - tracker.startTime;
-    tracker.value += Math.floor(elapsed / 1000); // Add seconds
+    tracker.elapsedMs += elapsed; // Add to elapsedMs for consistent display
+    tracker.value = Math.floor(tracker.elapsedMs / 1000); // Update value in seconds
     tracker.isRunning = false;
     tracker.startTime = null;
   }
