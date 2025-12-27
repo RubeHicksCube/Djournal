@@ -5,6 +5,7 @@ import Home from './pages/Home';
 import Trackers from './pages/Trackers';
 import LoginPage from './pages/LoginPage';
 import Profile from './pages/Profile';
+import logo from './assets/logo.svg';
 
 function AuthenticatedApp() {
   const [user, setUser] = useState(null);
@@ -80,7 +81,10 @@ function AuthenticatedApp() {
     <div className="app">
         <nav className="nav">
           <div className="nav-container">
-            <NavLink to="/" className="nav-brand">📊 Log</NavLink>
+            <NavLink to="/" className="nav-brand">
+              <img src={logo} alt="Djournal" style={{ width: '24px', height: '24px', marginRight: '8px', verticalAlign: 'middle' }} />
+              Djournal
+            </NavLink>
 
             {/* Hamburger Menu Button */}
             <button

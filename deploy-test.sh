@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# AI Life v1.0.0 - Deployment Test Script
+# Djournal v1.0.0 - Deployment Test Script
 # This script tests the deployment process and verifies everything is working
 
 set -e
 
-echo "🚀 AI Life v1.0.0 - Deployment Test"
+echo "🚀 Djournal v1.0.0 - Deployment Test"
 echo "=================================="
 
 # Check if Docker is available
@@ -79,7 +79,7 @@ else
 fi
 
 echo ""
-echo "🎉 All tests passed! AI Life v1.0.0 is ready for deployment."
+echo "🎉 All tests passed! Djournal v1.0.0 is ready for deployment."
 echo ""
 echo "📋 Quick Start Instructions:"
 echo "1. docker-compose up -d"

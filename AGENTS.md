@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance for agentic coding agents working with the AI Life codebase.
+This file provides guidance for agentic coding agents working with the Djournal codebase.
 
 ## Development Commands
 
@@ -181,7 +181,7 @@ client/
 └── dist/              # Build output
 
 data/
-└── ailife.db          # SQLite database
+└── djournal.db        # SQLite database
 
 journal/
 └── *.md               # Journal entries (YYYY-MM-DD.md)

@@ -24,7 +24,7 @@ cd Djournal
 docker-compose up -d
 
 # Access the application
-# Open http://localhost:8000 in your browser
+# Open http://localhost:8001 in your browser
 ```
 
 **Default Login Credentials:**
@@ -57,7 +57,7 @@ npm run build
 npm start
 ```
 
-The application will be available at `http://localhost:8000`.
+The application will be available at `http://localhost:8000` (production) or `http://localhost:8001` (development).
 
 ## ⚙️ Configuration
 
@@ -90,10 +90,12 @@ environment:
 
 ## 🗂️ Data Storage
 
-Djournal uses a hybrid storage approach:
+Djournal uses in-memory state management with optional persistent storage:
 
-- **SQLite Database** (`data/djournal.db`): User accounts, health metrics, goals
-- **Markdown Files** (`journal/`): Daily journal entries in `YYYY-MM-DD.md` format
+- **User Accounts**: SQLite database (`data/djournal.db`) for authentication
+- **Daily State**: In-memory per-user state for entries, trackers, and custom fields
+- **Snapshots**: Saved to `journal/` directory as Markdown files with YAML frontmatter
+- **Exports**: Available in both Markdown and PDF formats
 
 ### Docker Volumes
 
@@ -110,17 +112,13 @@ When using Docker Compose, data is stored in named volumes:
 3. **Start Tracking**: Use the Home page to track daily activities
 4. **Journal**: Add journal entries for reflection and documentation
 
-### Health Tracking
+### Tracking Features
 
-Track these metrics daily:
-- Previous night's bedtime
-- Wake time
-- Water intake (cups)
-- Alcoholic drinks
-- Exercise (minutes)
-- Mood (1-10 scale)
-- Energy level (1-10 scale)
-- Stress level (1-10 scale)
+**Time Since Trackers**: Track elapsed time since specific events
+**Activity Duration Timers**: Start/stop timers for activities with manual time entry
+**Custom Counters**: Track daily counts (water, coffee, etc.) with auto-reset
+**Profile Fields**: Persistent custom fields that appear in all exports
+**Activity Entries**: Log activities with timestamps throughout the day
 
 ### Journaling
 
@@ -134,13 +132,15 @@ Track these metrics daily:
 As an administrator, you can:
 - Create and manage user accounts
 - Assign admin roles to users
-- View all user activity
-- Manage system settings
+- **Privacy**: Each user's data is completely isolated and private
+- Admins can manage accounts but cannot see other users' journal data
 
-## 🔒 Security
+## 🔒 Security & Privacy
 
 - **Authentication**: JWT-based authentication with secure tokens
-- **Password Security**: Bcrypt password hashing
+- **Password Security**: Bcrypt password hashing with salt
+- **Per-User Data Isolation**: Each user's data is completely separate and private
+- **Admin Boundaries**: Admins can manage users but cannot access their journal data
 - **Environment Variables**: Sensitive data stored in environment variables
 - **No External Dependencies**: Completely self-contained, no external service calls
 
@@ -159,7 +159,7 @@ npm run dev
 
 This starts:
 - Backend server on `http://localhost:8001`
-- Frontend development server on `http://localhost:3000`
+- Frontend development server on `http://localhost:3001` (with proxy to backend)
 
 ### Project Structure
 
@@ -271,14 +271,22 @@ If you encounter issues or have questions:
 2. Search existing [GitHub Issues](https://github.com/RubeHicksCube/Djournal/issues)
 3. Create a new issue with detailed information
 
-## 🎯 Roadmap
+## 🎯 Features & Updates (v1.0.0)
 
-Future enhancements planned:
+✅ **Completed**:
+- Dark/Light theme toggle with persistence
+- PDF export with professional formatting
+- Markdown export with YAML frontmatter
+- Per-user data isolation for privacy
+- Timer pause/resume with elapsed time preservation
+- Manual time entry for activity duration trackers
+- Editable custom counter values
+- Auto-save snapshots before exports
+
+🔮 **Future Enhancements**:
 - [ ] Data visualization and analytics
 - [ ] Mobile app (React Native)
 - [ ] Integration with health devices
-- [ ] Advanced export formats (PDF, JSON)
-- [ ] Theme customization
 - [ ] Multi-language support
 
 ---

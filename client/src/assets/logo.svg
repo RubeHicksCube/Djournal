@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24">
+  <defs>
+    <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4a90e2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#357abd;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Journal/Book background -->
+  <rect x="6" y="4" width="20" height="24" rx="1.5" fill="url(#logoGrad)"/>
+  <!-- Pages effect -->
+  <rect x="7.5" y="5.5" width="17" height="21" rx="1" fill="#f8f9fa"/>
+  <!-- Binding -->
+  <rect x="6" y="4" width="3" height="24" rx="1" fill="#2d5a87"/>
+  <!-- Lines on page -->
+  <line x1="11" y1="10" x2="23" y2="10" stroke="#cbd5e0" stroke-width="0.8"/>
+  <line x1="11" y1="14" x2="23" y2="14" stroke="#cbd5e0" stroke-width="0.8"/>
+  <line x1="11" y1="18" x2="23" y2="18" stroke="#cbd5e0" stroke-width="0.8"/>
+  <line x1="11" y1="22" x2="20" y2="22" stroke="#cbd5e0" stroke-width="0.8"/>
+</svg>
