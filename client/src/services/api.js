@@ -77,11 +77,11 @@ export const api = {
   },
 
   // Add/update duration tracker
-  updateDurationTracker: async (name, type) => {
+  updateDurationTracker: async (name) => {
     const response = await fetch(`${API_BASE}/trackers/duration`, {
       method: 'POST',
       headers: getAuthHeaders(),
-      body: JSON.stringify({ name, type })
+      body: JSON.stringify({ name })
     });
     return response.json();
   },
@@ -114,15 +114,6 @@ export const api = {
 
   resetTimer: async (id) => {
     const response = await fetch(`${API_BASE}/trackers/timer/reset/${id}`, {
-      method: 'POST',
-      headers: getAuthHeaders()
-    });
-    return response.json();
-  },
-
-  // Counter increment
-  incrementCounter: async (id) => {
-    const response = await fetch(`${API_BASE}/trackers/counter/increment/${id}`, {
       method: 'POST',
       headers: getAuthHeaders()
     });
@@ -256,6 +247,12 @@ export const api = {
     window.location.href = `${API_BASE}/download${token ? '?token=' + token : ''}`;
   },
 
+  // Download PDF
+  downloadPDF: () => {
+    const token = localStorage.getItem('authToken');
+    window.location.href = `${API_BASE}/download-pdf${token ? '?token=' + token : ''}`;
+  },
+
   // Export management
   saveSnapshot: async () => {
     const response = await fetch(`${API_BASE}/exports/save-snapshot`, {
@@ -301,6 +298,36 @@ export const api = {
     const form = document.createElement('form');
     form.method = 'POST';
     form.action = `${API_BASE}/exports/download-range`;
+    form.target = '_blank';
+
+    const tokenInput = document.createElement('input');
+    tokenInput.type = 'hidden';
+    tokenInput.name = 'token';
+    tokenInput.value = token;
+    form.appendChild(tokenInput);
+
+    const startInput = document.createElement('input');
+    startInput.type = 'hidden';
+    startInput.name = 'startDate';
+    startInput.value = startDate;
+    form.appendChild(startInput);
+
+    const endInput = document.createElement('input');
+    endInput.type = 'hidden';
+    endInput.name = 'endDate';
+    endInput.value = endDate;
+    form.appendChild(endInput);
+
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
+  },
+
+  downloadDateRangePDF: (startDate, endDate) => {
+    const token = localStorage.getItem('authToken');
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = `${API_BASE}/exports/download-range-pdf`;
     form.target = '_blank';
 
     const tokenInput = document.createElement('input');

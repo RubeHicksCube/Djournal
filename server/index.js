@@ -3,11 +3,15 @@ const cors = require('cors');
 const path = require('path');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const PDFDocument = require('pdfkit');
 
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 8001;
+
+// Import proper auth middleware
+const { generateToken, authMiddleware } = require('./middleware/auth');
 
 // In-memory users (simplified for debugging)
 const users = [];
@@ -53,7 +57,84 @@ const historicalData = {};
 // Snapshot retention settings: { userId: { maxDays: 30, maxCount: 100 } }
 const snapshotSettings = {};
 
+// Profile fields storage (persist across sessions): { userId: { fieldKey: fieldValue, ... } }
+const profileFields = {};
+
+// Persistent tracker storage: { userId: { timeSinceTrackers: [...], durationTrackers: [...], customCounters: [...] } }
+const persistentTrackers = {};
+
 let nextId = 1;
+
+// Helper function to initialize persistent trackers for a user
+function initializePersistentTrackers(userId) {
+  if (!persistentTrackers[userId]) {
+    persistentTrackers[userId] = {
+      timeSinceTrackers: [],
+      durationTrackers: [],
+      customCounters: []
+    };
+  }
+}
+
+// Helper function to load trackers from persistent storage into daily state
+function loadTrackersIntoState(userId) {
+  initializePersistentTrackers(userId);
+
+  const userTrackers = persistentTrackers[userId];
+
+  // Load time since trackers (persist as-is)
+  dailyState.timeSinceTrackers = [...userTrackers.timeSinceTrackers];
+
+  // Load duration trackers (persist as-is)
+  dailyState.durationTrackers = [...userTrackers.durationTrackers];
+
+  // Load custom counters (persist structure, but reset values to 0 on new day)
+  dailyState.customCounters = userTrackers.customCounters.map(counter => ({
+    ...counter,
+    value: 0 // Reset value to 0 for new day
+  }));
+}
+
+// Helper function to save trackers from daily state to persistent storage
+function saveTrackersToPersistent(userId) {
+  initializePersistentTrackers(userId);
+
+  // Save current state to persistent storage
+  persistentTrackers[userId] = {
+    timeSinceTrackers: [...dailyState.timeSinceTrackers],
+    durationTrackers: [...dailyState.durationTrackers],
+    customCounters: dailyState.customCounters.map(counter => ({
+      ...counter
+      // Note: We keep the current value in persistent storage
+    }))
+  };
+}
+
+// Helper function to check for date transition and handle accordingly
+function checkDateTransition(userId) {
+  const currentDate = new Date().toISOString().slice(0, 10);
+
+  if (dailyState.date !== currentDate) {
+    console.log(`Date transition detected: ${dailyState.date} -> ${currentDate}`);
+
+    // Save old state to history
+    saveDailySnapshot(userId);
+
+    // Update to new date
+    dailyState.date = currentDate;
+
+    // Reset daily fields
+    dailyState.previousBedtime = '';
+    dailyState.wakeTime = '';
+    dailyState.customFields = customFieldTemplates.map(t => ({ ...t, value: '' }));
+    dailyState.dailyCustomFields = [];
+    dailyState.dailyTasks = [];
+    dailyState.entries = [];
+
+    // Load persistent trackers and reset counter values
+    loadTrackersIntoState(userId);
+  }
+}
 
 // Helper function to clean up old snapshots based on retention settings
 function cleanupOldSnapshots(userId) {
@@ -107,54 +188,116 @@ function saveDailySnapshot(userId) {
 }
 
 // Helper function to generate YAML frontmatter and markdown content
-function generateMarkdownWithYAML(dayData) {
+function generateMarkdownWithYAML(dayData, username = null, userProfileFields = null) {
   let yaml = '---\n';
-  yaml += `date: ${dayData.date}\n`;
 
-  // Sleep metrics
-  if (dayData.previousBedtime) {
-    yaml += `bedtime: "${dayData.previousBedtime}"\n`;
+  // User Information (at the top)
+  if (username) {
+    yaml += `# User Information\n`;
+    yaml += `user: "${username}"\n`;
   }
-  if (dayData.wakeTime) {
-    yaml += `wake_time: "${dayData.wakeTime}"\n`;
+  yaml += `date: "${dayData.date}"\n`;
+  yaml += '\n';
+
+  // Profile Fields (right after user info)
+  if (userProfileFields && Object.keys(userProfileFields).length > 0) {
+    yaml += '# Profile Fields\n';
+    yaml += 'profile:\n';
+    Object.entries(userProfileFields).forEach(([key, value]) => {
+      yaml += `  ${key}: "${String(value).replace(/"/g, '\\"')}"\n`;
+    });
+    yaml += '\n';
   }
 
-  // Custom counters
+  // Sleep Metrics
+  if (dayData.previousBedtime || dayData.wakeTime) {
+    yaml += '# Sleep Metrics\n';
+    if (dayData.previousBedtime) {
+      yaml += `bedtime: "${dayData.previousBedtime}"\n`;
+    }
+    if (dayData.wakeTime) {
+      yaml += `wake_time: "${dayData.wakeTime}"\n`;
+    }
+    yaml += '\n';
+  }
+
+  // Time Since Trackers (persist across days)
+  if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
+    yaml += '# Time Since Trackers (persist across days)\n';
+    yaml += 'time_since_trackers:\n';
+    dayData.timeSinceTrackers.forEach(t => {
+      yaml += `  - name: "${t.name.replace(/"/g, '\\"')}"\n`;
+      yaml += `    date: "${t.date}"\n`;
+    });
+    yaml += '\n';
+  }
+
+  // Duration Trackers (persist across days)
+  if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
+    yaml += '# Duration Trackers (persist across days)\n';
+    yaml += 'duration_trackers:\n';
+    dayData.durationTrackers.forEach(t => {
+      yaml += `  - name: "${t.name.replace(/"/g, '\\"')}"\n`;
+      yaml += `    type: "${t.type}"\n`;
+      yaml += `    value: ${t.value}\n`;
+
+      // Add formatted value for better readability
+      if (t.type === 'timer') {
+        const hours = Math.floor(t.value / 3600);
+        const minutes = Math.floor((t.value % 3600) / 60);
+        const seconds = t.value % 60;
+        yaml += `    formatted: "${hours}h ${minutes}m ${seconds}s"\n`;
+      } else if (t.type === 'counter') {
+        yaml += `    formatted: "${t.value} minutes"\n`;
+      }
+    });
+    yaml += '\n';
+  }
+
+  // Custom Counters (persist but values reset daily)
   if (dayData.customCounters && dayData.customCounters.length > 0) {
+    yaml += '# Custom Counters (persist but values reset daily)\n';
     yaml += 'custom_counters:\n';
     dayData.customCounters.forEach(c => {
       yaml += `  - name: "${c.name}"\n`;
       yaml += `    value: ${c.value}\n`;
     });
+    yaml += '\n';
   }
 
-  // Template custom fields
+  // Template Fields (persist template, values reset daily)
   if (dayData.customFields && dayData.customFields.length > 0) {
+    yaml += '# Template Fields (persist template, values reset daily)\n';
     yaml += 'template_fields:\n';
     dayData.customFields.forEach(f => {
       if (f.value) {
         yaml += `  ${f.key}: "${f.value.replace(/"/g, '\\"')}"\n`;
       }
     });
+    yaml += '\n';
   }
 
-  // Daily custom fields
+  // Daily Fields (do not persist)
   if (dayData.dailyCustomFields && dayData.dailyCustomFields.length > 0) {
+    yaml += '# Daily Fields (do not persist)\n';
     yaml += 'daily_fields:\n';
     dayData.dailyCustomFields.forEach(f => {
       if (f.value) {
         yaml += `  ${f.key}: "${f.value.replace(/"/g, '\\"')}"\n`;
       }
     });
+    yaml += '\n';
   }
 
-  // Daily tasks
+  // Daily Tasks
   if (dayData.dailyTasks && dayData.dailyTasks.length > 0) {
+    yaml += '# Daily Tasks\n';
     yaml += 'tasks:\n';
     dayData.dailyTasks.forEach(t => {
       yaml += `  - text: "${t.text.replace(/"/g, '\\"')}"\n`;
       yaml += `    completed: ${t.completed}\n`;
     });
+    yaml += '\n';
   }
 
   yaml += '---\n\n';
@@ -177,31 +320,185 @@ function generateMarkdownWithYAML(dayData) {
   return yaml + content;
 }
 
+// Helper function to format duration for PDF
+function formatDuration(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+
+  if (hours > 0) return `${hours}h ${minutes}m ${secs}s`;
+  if (minutes > 0) return `${minutes}m ${secs}s`;
+  return `${secs}s`;
+}
+
+// Helper function to format date for PDF
+function formatDate(dateStr) {
+  const date = new Date(dateStr);
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  return `${date.getFullYear()}-${months[date.getMonth()]}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// Helper function to generate PDF report using PDFKit
+async function generatePDFReport(dayData, username = null, userProfileFields = null) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const buffers = [];
+
+    doc.on('data', buffers.push.bind(buffers));
+    doc.on('end', () => resolve(Buffer.concat(buffers)));
+    doc.on('error', reject);
+
+    // Header with purple background
+    doc.rect(0, 0, doc.page.width, 100).fillAndStroke('#6B46C1', '#6B46C1');
+    doc.fillColor('#FFFFFF')
+       .fontSize(24)
+       .text('DAILY JOURNAL REPORT', 50, 30, { align: 'center' });
+    doc.fontSize(14)
+       .text(formatDate(dayData.date), 50, 60, { align: 'center' });
+
+    // Move cursor down after header
+    doc.fillColor('#000000');
+    doc.y = 120;
+    doc.moveDown(1);
+
+    // User Information Section
+    if (username) {
+      doc.fontSize(16).fillColor('#6B46C1').text('USER INFORMATION', { underline: true });
+      doc.fontSize(12).fillColor('#000000').text(`Username: ${username}`);
+      doc.moveDown();
+    }
+
+    // Profile Fields Section
+    if (userProfileFields && Object.keys(userProfileFields).length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('PROFILE', { underline: true });
+      for (const [key, value] of Object.entries(userProfileFields)) {
+        const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
+        doc.fontSize(12).fillColor('#000000').text(`${capitalizedKey}: ${value}`);
+      }
+      doc.moveDown();
+    }
+
+    // Sleep Metrics
+    if (dayData.previousBedtime || dayData.wakeTime) {
+      doc.fontSize(16).fillColor('#6B46C1').text('SLEEP METRICS', { underline: true });
+      if (dayData.previousBedtime) doc.fontSize(12).fillColor('#000000').text(`Bedtime: ${dayData.previousBedtime}`);
+      if (dayData.wakeTime) doc.fontSize(12).fillColor('#000000').text(`Wake Time: ${dayData.wakeTime}`);
+      doc.moveDown();
+    }
+
+    // Time Since Trackers
+    if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('TIME SINCE TRACKERS', { underline: true });
+      dayData.timeSinceTrackers.forEach(t => {
+        doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)}`);
+      });
+      doc.moveDown();
+    }
+
+    // Duration Trackers
+    if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('DURATION TRACKERS', { underline: true });
+      dayData.durationTrackers.forEach(t => {
+        const formatted = t.type === 'timer' ? formatDuration(t.value) : `${t.value} minutes`;
+        doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${formatted}`);
+      });
+      doc.moveDown();
+    }
+
+    // Custom Counters
+    if (dayData.customCounters && dayData.customCounters.length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('CUSTOM COUNTERS', { underline: true });
+      dayData.customCounters.forEach(c => {
+        doc.fontSize(12).fillColor('#000000').text(`• ${c.name}: ${c.value}`);
+      });
+      doc.moveDown();
+    }
+
+    // Template Fields
+    if (dayData.customFields && dayData.customFields.length > 0) {
+      const filledFields = dayData.customFields.filter(f => f.value);
+      if (filledFields.length > 0) {
+        doc.fontSize(16).fillColor('#6B46C1').text('TEMPLATE FIELDS', { underline: true });
+        filledFields.forEach(f => {
+          const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
+          doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
+        });
+        doc.moveDown();
+      }
+    }
+
+    // Daily Custom Fields
+    if (dayData.dailyCustomFields && dayData.dailyCustomFields.length > 0) {
+      const filledFields = dayData.dailyCustomFields.filter(f => f.value);
+      if (filledFields.length > 0) {
+        doc.fontSize(16).fillColor('#6B46C1').text('DAILY FIELDS', { underline: true });
+        filledFields.forEach(f => {
+          const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
+          doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
+        });
+        doc.moveDown();
+      }
+    }
+
+    // Daily Tasks
+    if (dayData.dailyTasks && dayData.dailyTasks.length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('DAILY TASKS', { underline: true });
+      dayData.dailyTasks.forEach(t => {
+        const check = t.completed ? '✓' : '○';
+        doc.fontSize(12).fillColor('#000000').text(`${check} ${t.text}`);
+      });
+      doc.moveDown();
+    }
+
+    // Activity Entries
+    if (dayData.entries && dayData.entries.length > 0) {
+      doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
+      dayData.entries.forEach(e => {
+        // Check if we need a new page
+        if (doc.y > doc.page.height - 150) {
+          doc.addPage();
+        }
+
+        doc.strokeColor('#CCCCCC').moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
+        doc.moveDown(0.5);
+        doc.fontSize(11).fillColor('#6B46C1').text(e.timestamp, { continued: false });
+        doc.fontSize(12).fillColor('#000000').text(e.text, { align: 'left' });
+
+        // Handle images (base64 embedded images)
+        if (e.image) {
+          try {
+            // Extract base64 data
+            const base64Data = e.image.split(',')[1] || e.image;
+            const imageBuffer = Buffer.from(base64Data, 'base64');
+
+            // Check if we need a new page for the image
+            if (doc.y > doc.page.height - 250) {
+              doc.addPage();
+            }
+
+            doc.moveDown(0.5);
+            doc.image(imageBuffer, 50, doc.y, { width: 400, fit: [400, 300] });
+            doc.moveDown(10); // Move down to account for image height
+          } catch (imageError) {
+            console.error('Error embedding image in PDF:', imageError);
+            doc.fontSize(10).fillColor('#999999').text('[Image could not be embedded]');
+          }
+        }
+
+        doc.moveDown();
+      });
+    } else {
+      doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
+      doc.fontSize(12).fillColor('#999999').text('No entries today', { italic: true });
+      doc.moveDown();
+    }
+
+    doc.end();
+  });
+}
+
 // Generate token
-function generateToken(user) {
-  return jwt.sign(
-    { id: user.id, username: user.username, is_admin: user.is_admin },
-    process.env.JWT_SECRET || 'dev-secret',
-    { expiresIn: '7d' }
-  );
-}
 
-// Auth middleware
-function authMiddleware(req, res, next) {
-  const token = req.headers.authorization?.replace('Bearer ', '');
-  
-  if (!token) {
-    return res.status(401).json({ error: 'No token provided' });
-  }
-
-  const user = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret');
-  if (!user) {
-    return res.status(401).json({ error: 'Invalid token' });
-  }
-
-  req.user = user;
-  next();
-}
 
 // Login endpoint
 app.post('/api/auth/login', (req, res) => {
@@ -242,6 +539,9 @@ app.get('/api/users/me', authMiddleware, (req, res) => {
     return res.status(404).json({ error: 'User not found' });
   }
 
+  // Get user's profile fields from persistent storage
+  const userProfileFields = profileFields[req.user.id] || {};
+
   res.json({
     user: {
       id: user.id,
@@ -249,26 +549,39 @@ app.get('/api/users/me', authMiddleware, (req, res) => {
       email: user.email || null,
       is_admin: user.is_admin
     },
-    profileFields: {}
+    profileFields: userProfileFields
   });
 });
 
 // Profile field management
 app.put('/api/users/profile-field', authMiddleware, (req, res) => {
   const { key, value } = req.body;
-  
+
   if (!key || value === undefined) {
     return res.status(400).json({ error: 'Key and value required' });
   }
 
-  console.log(`Setting profile field: ${key} = ${value}`);
+  // Initialize user profile fields if not exists
+  if (!profileFields[req.user.id]) {
+    profileFields[req.user.id] = {};
+  }
+
+  // Save the profile field
+  profileFields[req.user.id][key] = value;
+
+  console.log(`Setting profile field for user ${req.user.id}: ${key} = ${value}`);
   res.json({ success: true });
 });
 
 app.delete('/api/users/profile-field/:key', authMiddleware, (req, res) => {
   const { key } = req.params;
 
-  console.log(`Deleting profile field: ${key}`);
+  // Remove the profile field if it exists
+  if (profileFields[req.user.id]) {
+    delete profileFields[req.user.id][key];
+  }
+
+  console.log(`Deleting profile field for user ${req.user.id}: ${key}`);
   res.json({ success: true });
 });
 
@@ -300,7 +613,9 @@ app.put('/api/users/me', authMiddleware, (req, res) => {
 // Get all users (admin only)
 app.get('/api/users/list', authMiddleware, (req, res) => {
   // Check if user is admin
+  console.log('GET /api/users/list - req.user:', req.user);
   if (!req.user || !req.user.is_admin) {
+    console.log('403 Forbidden - is_admin:', req.user?.is_admin);
     return res.status(403).json({ error: 'Unauthorized' });
   }
 
@@ -362,7 +677,8 @@ app.post('/api/users/create', authMiddleware, (req, res) => {
       id: newUser.id,
       username: newUser.username,
       email: newUser.email,
-      is_admin: newUser.is_admin
+      is_admin: newUser.is_admin,
+      created_at: new Date().toISOString()
     }
   });
 });
@@ -472,6 +788,9 @@ app.delete('/api/users/:id', authMiddleware, (req, res) => {
 
 // Get current state (Home page data)
 app.get('/api/state', authMiddleware, (req, res) => {
+  // Check for date transition and handle tracker persistence
+  checkDateTransition(req.user.id);
+
   res.json(dailyState);
 });
 
@@ -529,11 +848,49 @@ app.get('/api/download', (req, res) => {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  const markdown = generateMarkdownWithYAML(dailyState);
+  // Get user info and profile fields
+  const user = users.find(u => u.id === decoded.id);
+  const username = user ? user.username : null;
+  const userProfileFields = profileFields[decoded.id] || {};
+
+  const markdown = generateMarkdownWithYAML(dailyState, username, userProfileFields);
 
   res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
   res.setHeader('Content-Disposition', `attachment; filename="${dailyState.date}.md"`);
   res.send(markdown);
+});
+
+// Download PDF (current day)
+app.get('/api/download-pdf', async (req, res) => {
+  const token = req.query.token;
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret');
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  try {
+    checkDateTransition(decoded.id);
+
+    const user = users.find(u => u.id === decoded.id);
+    const username = user ? user.username : null;
+    const userProfileFields = profileFields[decoded.id] || {};
+
+    const pdfBuffer = await generatePDFReport(dailyState, username, userProfileFields);
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${dailyState.date}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    res.status(500).json({ error: 'Failed to generate PDF', details: error.message });
+  }
 });
 
 // Save daily snapshot
@@ -643,6 +1000,11 @@ app.post('/api/exports/download-range', (req, res) => {
     return res.status(400).json({ error: 'Start date and end date required' });
   }
 
+  // Get user info and profile fields
+  const user = users.find(u => u.id === userId);
+  const username = user ? user.username : null;
+  const userProfileFields = profileFields[userId] || {};
+
   const userHistory = historicalData[userId] || {};
   const dates = Object.keys(userHistory).filter(date => date >= startDate && date <= endDate).sort();
 
@@ -655,7 +1017,7 @@ app.post('/api/exports/download-range', (req, res) => {
 
   dates.forEach((date, index) => {
     const dayData = userHistory[date];
-    markdown += generateMarkdownWithYAML(dayData);
+    markdown += generateMarkdownWithYAML(dayData, username, userProfileFields);
 
     // Add separator between days (but not after the last one)
     if (index < dates.length - 1) {
@@ -672,6 +1034,216 @@ app.post('/api/exports/download-range', (req, res) => {
   res.send(markdown);
 });
 
+// Download PDF for date range
+app.post('/api/exports/download-range-pdf', async (req, res) => {
+  const { startDate, endDate, token } = req.body;
+
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  let decoded;
+  try {
+    decoded = jwt.verify(token, process.env.JWT_SECRET || 'dev-secret');
+  } catch (err) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+
+  const userId = decoded.id;
+
+  if (!startDate || !endDate) {
+    return res.status(400).json({ error: 'Start date and end date required' });
+  }
+
+  try {
+    const user = users.find(u => u.id === userId);
+    const username = user ? user.username : null;
+    const userProfileFields = profileFields[userId] || {};
+
+    const userHistory = historicalData[userId] || {};
+    const dates = Object.keys(userHistory).filter(date => date >= startDate && date <= endDate).sort();
+
+    if (dates.length === 0) {
+      return res.status(404).json({ error: 'No data available for this date range' });
+    }
+
+    // Generate combined PDF with all days
+    const pdfBuffer = await new Promise((resolve, reject) => {
+      const doc = new PDFDocument({ size: 'A4', margin: 50 });
+      const buffers = [];
+
+      doc.on('data', buffers.push.bind(buffers));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', reject);
+
+      dates.forEach((date, index) => {
+        const dayData = userHistory[date];
+
+        // Add page break between days (but not before the first day)
+        if (index > 0) {
+          doc.addPage();
+        }
+
+        // Header with purple background
+        doc.rect(0, 0, doc.page.width, 100).fillAndStroke('#6B46C1', '#6B46C1');
+        doc.fillColor('#FFFFFF')
+           .fontSize(24)
+           .text('DAILY JOURNAL REPORT', 50, 30, { align: 'center' });
+        doc.fontSize(14)
+           .text(formatDate(dayData.date), 50, 60, { align: 'center' });
+
+        // Move cursor down after header
+        doc.fillColor('#000000');
+        doc.y = 120;
+        doc.moveDown(1);
+
+        // User Information Section
+        if (username) {
+          doc.fontSize(16).fillColor('#6B46C1').text('USER INFORMATION', { underline: true });
+          doc.fontSize(12).fillColor('#000000').text(`Username: ${username}`);
+          doc.moveDown();
+        }
+
+        // Profile Fields Section
+        if (userProfileFields && Object.keys(userProfileFields).length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('PROFILE', { underline: true });
+          for (const [key, value] of Object.entries(userProfileFields)) {
+            const capitalizedKey = key.charAt(0).toUpperCase() + key.slice(1);
+            doc.fontSize(12).fillColor('#000000').text(`${capitalizedKey}: ${value}`);
+          }
+          doc.moveDown();
+        }
+
+        // Sleep Metrics
+        if (dayData.previousBedtime || dayData.wakeTime) {
+          doc.fontSize(16).fillColor('#6B46C1').text('SLEEP METRICS', { underline: true });
+          if (dayData.previousBedtime) doc.fontSize(12).fillColor('#000000').text(`Bedtime: ${dayData.previousBedtime}`);
+          if (dayData.wakeTime) doc.fontSize(12).fillColor('#000000').text(`Wake Time: ${dayData.wakeTime}`);
+          doc.moveDown();
+        }
+
+        // Time Since Trackers
+        if (dayData.timeSinceTrackers && dayData.timeSinceTrackers.length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('TIME SINCE TRACKERS', { underline: true });
+          dayData.timeSinceTrackers.forEach(t => {
+            doc.fontSize(12).fillColor('#000000').text(`• ${t.name}: ${formatDate(t.date)}`);
+          });
+          doc.moveDown();
+        }
+
+        // Duration Trackers
+        if (dayData.durationTrackers && dayData.durationTrackers.length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('DURATION TRACKERS', { underline: true });
+          dayData.durationTrackers.forEach(t => {
+            const formatted = t.type === 'timer' ? formatDuration(t.value) : `${t.value} minutes`;
+            doc.fontSize(12).fillColor('#000000').text(`• ${t.name} (${t.type}): ${formatted}`);
+          });
+          doc.moveDown();
+        }
+
+        // Custom Counters
+        if (dayData.customCounters && dayData.customCounters.length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('CUSTOM COUNTERS', { underline: true });
+          dayData.customCounters.forEach(c => {
+            doc.fontSize(12).fillColor('#000000').text(`• ${c.name}: ${c.value}`);
+          });
+          doc.moveDown();
+        }
+
+        // Template Fields
+        if (dayData.customFields && dayData.customFields.length > 0) {
+          const filledFields = dayData.customFields.filter(f => f.value);
+          if (filledFields.length > 0) {
+            doc.fontSize(16).fillColor('#6B46C1').text('TEMPLATE FIELDS', { underline: true });
+            filledFields.forEach(f => {
+              const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
+              doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
+            });
+            doc.moveDown();
+          }
+        }
+
+        // Daily Custom Fields
+        if (dayData.dailyCustomFields && dayData.dailyCustomFields.length > 0) {
+          const filledFields = dayData.dailyCustomFields.filter(f => f.value);
+          if (filledFields.length > 0) {
+            doc.fontSize(16).fillColor('#6B46C1').text('DAILY FIELDS', { underline: true });
+            filledFields.forEach(f => {
+              const capitalizedKey = f.key.charAt(0).toUpperCase() + f.key.slice(1);
+              doc.fontSize(12).fillColor('#000000').text(`• ${capitalizedKey}: ${f.value}`);
+            });
+            doc.moveDown();
+          }
+        }
+
+        // Daily Tasks
+        if (dayData.dailyTasks && dayData.dailyTasks.length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('DAILY TASKS', { underline: true });
+          dayData.dailyTasks.forEach(t => {
+            const check = t.completed ? '✓' : '○';
+            doc.fontSize(12).fillColor('#000000').text(`${check} ${t.text}`);
+          });
+          doc.moveDown();
+        }
+
+        // Activity Entries
+        if (dayData.entries && dayData.entries.length > 0) {
+          doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
+          dayData.entries.forEach(e => {
+            // Check if we need a new page
+            if (doc.y > doc.page.height - 150) {
+              doc.addPage();
+            }
+
+            doc.strokeColor('#CCCCCC').moveTo(50, doc.y).lineTo(doc.page.width - 50, doc.y).stroke();
+            doc.moveDown(0.5);
+            doc.fontSize(11).fillColor('#6B46C1').text(e.timestamp, { continued: false });
+            doc.fontSize(12).fillColor('#000000').text(e.text, { align: 'left' });
+
+            // Handle images (base64 embedded images)
+            if (e.image) {
+              try {
+                const base64Data = e.image.split(',')[1] || e.image;
+                const imageBuffer = Buffer.from(base64Data, 'base64');
+
+                if (doc.y > doc.page.height - 250) {
+                  doc.addPage();
+                }
+
+                doc.moveDown(0.5);
+                doc.image(imageBuffer, 50, doc.y, { width: 400, fit: [400, 300] });
+                doc.moveDown(10);
+              } catch (imageError) {
+                console.error('Error embedding image in PDF:', imageError);
+                doc.fontSize(10).fillColor('#999999').text('[Image could not be embedded]');
+              }
+            }
+
+            doc.moveDown();
+          });
+        } else {
+          doc.fontSize(16).fillColor('#6B46C1').text('ACTIVITY ENTRIES', { underline: true });
+          doc.fontSize(12).fillColor('#999999').text('No entries today', { italic: true });
+          doc.moveDown();
+        }
+      });
+
+      doc.end();
+    });
+
+    const filename = dates.length === 1
+      ? `${startDate}.pdf`
+      : `${startDate}_to_${endDate}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdfBuffer);
+  } catch (error) {
+    console.error('Error generating PDF:', error);
+    res.status(500).json({ error: 'Failed to generate PDF', details: error.message });
+  }
+});
+
 // Tracker endpoints
 app.post('/api/trackers/time-since', authMiddleware, (req, res) => {
   const { name, date } = req.body;
@@ -683,34 +1255,51 @@ app.post('/api/trackers/time-since', authMiddleware, (req, res) => {
   };
 
   dailyState.timeSinceTrackers.push(newTracker);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
 app.delete('/api/trackers/time-since/:id', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id);
   dailyState.timeSinceTrackers = dailyState.timeSinceTrackers.filter(t => t.id !== id);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
 app.post('/api/trackers/duration', authMiddleware, (req, res) => {
-  const { name, type } = req.body;
+  const { name } = req.body;
 
   const newTracker = {
     id: nextId++,
     name: name,
-    type: type, // 'timer' or 'counter'
+    type: 'timer', // Always create as timer
     value: 0,
     isRunning: false,
-    startTime: null
+    startTime: null,
+    elapsedMs: 0  // Initialize elapsed milliseconds for timer
   };
 
   dailyState.durationTrackers.push(newTracker);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
 app.delete('/api/trackers/duration/:id', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id);
   dailyState.durationTrackers = dailyState.durationTrackers.filter(t => t.id !== id);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
@@ -733,6 +1322,9 @@ app.post('/api/trackers/manual-time', authMiddleware, (req, res) => {
   tracker.elapsedMs = elapsedMs;
   tracker.isRunning = false;
 
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   console.log(`Set manual time for tracker ${trackerId}: ${elapsedMs}ms`);
   res.json(dailyState);
 });
@@ -745,6 +1337,9 @@ app.post('/api/trackers/timer/start/:id', authMiddleware, (req, res) => {
     tracker.isRunning = true;
     tracker.startTime = Date.now();
   }
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
 
   res.json(dailyState);
 });
@@ -760,6 +1355,9 @@ app.post('/api/trackers/timer/stop/:id', authMiddleware, (req, res) => {
     tracker.startTime = null;
   }
 
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
@@ -771,18 +1369,11 @@ app.post('/api/trackers/timer/reset/:id', authMiddleware, (req, res) => {
     tracker.value = 0;
     tracker.isRunning = false;
     tracker.startTime = null;
+    tracker.elapsedMs = 0;
   }
 
-  res.json(dailyState);
-});
-
-app.post('/api/trackers/counter/increment/:id', authMiddleware, (req, res) => {
-  const id = parseInt(req.params.id);
-  const tracker = dailyState.durationTrackers.find(t => t.id === id);
-
-  if (tracker && tracker.type === 'counter') {
-    tracker.value += 1;
-  }
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
 
   res.json(dailyState);
 });
@@ -802,6 +1393,10 @@ app.post('/api/custom-counters/create', authMiddleware, (req, res) => {
   };
 
   dailyState.customCounters.push(newCounter);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
@@ -813,6 +1408,9 @@ app.post('/api/custom-counters/:id/increment', authMiddleware, (req, res) => {
     counter.value += 1;
   }
 
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
@@ -823,6 +1421,9 @@ app.post('/api/custom-counters/:id/decrement', authMiddleware, (req, res) => {
   if (counter && counter.value > 0) {
     counter.value -= 1;
   }
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
 
   res.json(dailyState);
 });
@@ -836,12 +1437,19 @@ app.put('/api/custom-counters/:id/set', authMiddleware, (req, res) => {
     counter.value = value;
   }
 
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 
 app.delete('/api/custom-counters/:id', authMiddleware, (req, res) => {
   const id = parseInt(req.params.id);
   dailyState.customCounters = dailyState.customCounters.filter(c => c.id !== id);
+
+  // Save to persistent storage
+  saveTrackersToPersistent(req.user.id);
+
   res.json(dailyState);
 });
 

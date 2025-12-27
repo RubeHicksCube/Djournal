@@ -125,6 +125,10 @@ function setProfileField(userId, key, value) {
   }
 }
 
+function deleteProfileField(userId, key) {
+  db.prepare('DELETE FROM user_profile_fields WHERE user_id = ? AND field_key = ?').run(userId, key);
+}
+
 module.exports = {
   db,
   initializeDatabase,
@@ -133,6 +137,7 @@ module.exports = {
   getUserById,
   getProfileFields,
   setProfileField,
+  deleteProfileField,
   getDailyData,
   setDailyData
 };

@@ -4,7 +4,7 @@ import { format } from 'date-fns';
 
 const formatDate = (dateStr) => {
   const date = new Date(dateStr);
-  return format(date, 'yyyyMMMdd');
+  return format(date, 'yyyy-MMM-dd');
 };
 
 export default function Home() {
@@ -49,30 +49,11 @@ export default function Home() {
     }
   };
 
+
   const updateDaily = async (field, value) => {
     // Prevent unnecessary updates if value hasn't actually changed
     if (state[field] === value) return;
-    
-    // Handle time input digit conversion for time fields
-    if (value && (field === 'previousBedtime' || field === 'wakeTime')) {
-      // Convert digit input like "554" to proper HH:MM format
-      if (/^\d+$/.test(value)) {
-        const numStr = value.toString().padStart(4, '0');
-        if (numStr.length <= 4) {
-          // "54" -> "00:54", "554" -> "05:54"
-          const hours = numStr.slice(0, 2);
-          const minutes = numStr.slice(2, 4);
-          value = `${hours}:${minutes}`;
-        } else if (numStr.length === 3) {
-          // "554" -> "05:54" 
-          value = `0${numStr.slice(0, 1)}:${numStr.slice(1)}`;
-        } else if (numStr.length >= 4) {
-          // "1234" -> "12:34"
-          value = `${numStr.slice(0, 2)}:${numStr.slice(2, 4)}`;
-        }
-      }
-    }
-    
+
     try {
       const data = await api.updateDaily({ [field]: value });
       setState(data);
@@ -227,12 +208,8 @@ export default function Home() {
     return <div className="loading">Loading...</div>;
   }
 
-  if (loading) {
-    return <div className="loading">Loading...</div>;
-  }
-
-  if (loading) {
-    return <div className="loading">Loading...</div>;
+  if (!state) {
+    return <div className="loading">Error loading application data. Please refresh the page or contact support.</div>;
   }
 
   return (
@@ -244,12 +221,8 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="grid-layout">
-        {loading ? (
-        <div className="loading">Loading...</div>
-      ) : (
-        <>
-      <div className="card card-primary">
+      <div className="home-grid-layout">
+        <div className="card card-primary">
           <h2>⏰ Daily Data</h2>
           <p className="card-description">Sleep schedule tracking</p>
 
@@ -258,20 +231,20 @@ export default function Home() {
               <label className="form-label">Previous Day Bedtime</label>
               <input
                 type="time"
-                  className="form-input"
-                  value={state.previousBedtime || ''}
-                  onChange={(e) => updateDaily('previousBedtime', e.target.value)}
-                />
+                className="form-input"
+                value={state.previousBedtime || ''}
+                onChange={(e) => updateDaily('previousBedtime', e.target.value)}
+              />
             </div>
 
             <div className="form-group">
               <label className="form-label">Today's Wake Time</label>
               <input
                 type="time"
-                  className="form-input"
-                  value={state.wakeTime || ''}
-                  onChange={(e) => updateDaily('wakeTime', e.target.value)}
-                />
+                className="form-input"
+                value={state.wakeTime || ''}
+                onChange={(e) => updateDaily('wakeTime', e.target.value)}
+              />
             </div>
           </div>
         </div>
@@ -403,10 +376,9 @@ export default function Home() {
             )}
           </div>
         </div>
-      </div>
 
-      <div className="card card-primary">
-        <h2>Activity Entry</h2>
+        <div className="card card-primary activity-entry-card">
+          <h2>📝 Activity Entry</h2>
         <p className="card-description">Enter to submit, Shift+Enter for new line</p>
         <form onSubmit={handleSubmitEntry}>
           <textarea
@@ -414,7 +386,7 @@ export default function Home() {
             onChange={(e) => setEntryText(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="What are you doing right now?"
-            rows="3"
+            rows="5"
             className="form-textarea"
           />
 
@@ -428,6 +400,7 @@ export default function Home() {
               type="file"
               accept="image/*"
               onChange={handleImageSelect}
+              style={{ display: 'none' }}
             />
           </div>
             {imagePreview && (
@@ -443,34 +416,37 @@ export default function Home() {
                 </button>
               </div>
             )}
-          </div>
 
-          <button type="submit" className="btn btn-primary">
-            Submit Entry
-          </button>
-        </form>
-      </div>
+            <button type="submit" className="btn btn-primary">
+              Submit Entry
+            </button>
+          </form>
 
-      {state.entries.length > 0 && (
-        <div className="card">
-          <h2>Today's Entries ({state.entries.length})</h2>
-          <div className="entries-list">
-            {state.entries.slice().reverse().map((entry) => (
-              <div key={entry.id} className="entry-item">
-                <div className="entry-content">
-                  <span className="entry-time">{entry.timestamp}</span>
-                  <span className="entry-text">{entry.text}</span>
-                  {entry.image && (
-                    <div className="entry-image">
-                      <img src={entry.image} alt="Entry attachment" />
+          {state.entries.length > 0 && (
+            <>
+              <hr style={{ margin: '2rem 0', border: 'none', borderTop: '1px solid var(--border-color)' }} />
+              <h3 style={{ marginBottom: '1rem', fontSize: '1.125rem', color: 'var(--text-primary)' }}>
+                Today's Entries ({state.entries.length})
+              </h3>
+              <div className="entries-list">
+                {state.entries.slice().reverse().map((entry) => (
+                  <div key={entry.id} className="entry-item">
+                    <div className="entry-content">
+                      <span className="entry-time">{entry.timestamp}</span>
+                      <span className="entry-text">{entry.text}</span>
+                      {entry.image && (
+                        <div className="entry-image">
+                          <img src={entry.image} alt="Entry attachment" />
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }

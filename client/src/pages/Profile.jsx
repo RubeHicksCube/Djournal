@@ -361,7 +361,22 @@ export default function Profile() {
     }
 
     api.downloadDateRange(startDate, endDate);
-    setMessage(`Downloading export from ${startDate} to ${endDate}...`);
+    setMessage(`Downloading markdown export from ${startDate} to ${endDate}...`);
+  };
+
+  const handleDownloadRangePDF = () => {
+    if (!startDate || !endDate) {
+      setMessage('Please select both start and end dates');
+      return;
+    }
+
+    if (startDate > endDate) {
+      setMessage('Start date must be before end date');
+      return;
+    }
+
+    api.downloadDateRangePDF(startDate, endDate);
+    setMessage(`Downloading PDF export from ${startDate} to ${endDate}...`);
   };
 
   if (loading) return <div className="loading">Loading...</div>;
@@ -558,7 +573,10 @@ export default function Profile() {
                 />
               </div>
               <button onClick={handleDownloadRange} className="btn btn-sm btn-success">
-                📥 Download Range
+                📥 Markdown
+              </button>
+              <button onClick={handleDownloadRangePDF} className="btn btn-sm btn-success">
+                📄 PDF
               </button>
             </div>
           </div>
@@ -695,7 +713,7 @@ export default function Profile() {
                     <strong>{user.username}</strong>
                     {user.email && <span className="user-email">{user.email}</span>}
                     <span className="user-date">
-                      Created: {new Date(user.created_at).toLocaleDateString()}
+                      Created: {formatDateDisplay(user.created_at)}
                     </span>
                   </div>
                   <div className="user-actions">

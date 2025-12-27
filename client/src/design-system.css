@@ -29,19 +29,19 @@
   --color-info-active: #93c5fd;
 
   /* Background Colors (Dark Theme) */
-  --bg-primary: #0a0e1a;
-  --bg-secondary: #13182b;
-  --bg-tertiary: #1a2138;
-  --bg-card: #1e2640;
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #111111;
+  --bg-card: #1a1a1a;
 
   /* Text Colors (Dark Theme) */
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-  --text-tertiary: #71717a;
+  --text-primary: #ffffff;
+  --text-secondary: #b4b4b4;
+  --text-tertiary: #808080;
 
   /* Border */
-  --border-color: #27303f;
-  --border-hover: #3a4558;
+  --border-color: #2a2a2a;
+  --border-hover: #3a3a3a;
 
   /* Spacing */
   --space-xs: 0.25rem;

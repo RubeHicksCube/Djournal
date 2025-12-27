@@ -10,6 +10,7 @@ function AuthenticatedApp() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(true);
 
   useEffect(() => {
     // Check authentication on mount
@@ -17,13 +18,37 @@ function AuthenticatedApp() {
       window.location.href = '/login';
       return;
     }
-    
+
     const userData = localStorage.getItem('user');
     if (userData) {
       setUser(JSON.parse(userData));
     }
+
+    // Load theme preference
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'light') {
+      setIsDarkMode(false);
+      document.body.classList.add('light-mode');
+    } else {
+      setIsDarkMode(true);
+      document.body.classList.remove('light-mode');
+    }
+
     setLoading(false);
   }, []);
+
+  const toggleTheme = () => {
+    const newTheme = !isDarkMode;
+    setIsDarkMode(newTheme);
+
+    if (newTheme) {
+      document.body.classList.remove('light-mode');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.body.classList.add('light-mode');
+      localStorage.setItem('theme', 'light');
+    }
+  };
 
   const handleLogout = () => {
     api.logout();
@@ -31,6 +56,10 @@ function AuthenticatedApp() {
 
   const handleDownloadToday = () => {
     api.downloadMarkdown();
+  };
+
+  const handleDownloadPDF = () => {
+    api.downloadPDF();
   };
 
   const handleSaveSnapshot = async () => {
@@ -73,11 +102,21 @@ function AuthenticatedApp() {
 
             {/* Action Buttons */}
             <div className={`nav-actions ${mobileMenuOpen ? 'mobile-open' : ''}`}>
+              <button
+                onClick={toggleTheme}
+                className="btn btn-sm btn-secondary"
+                title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              >
+                {isDarkMode ? '☀️' : '🌙'}
+              </button>
               <button onClick={handleSaveSnapshot} className="btn btn-sm btn-warning" title="Save today's snapshot">
                 💾 Save
               </button>
               <button onClick={handleDownloadToday} className="btn btn-sm btn-success" title="Download today's markdown">
-                📥 Export
+                📥 Markdown
+              </button>
+              <button onClick={handleDownloadPDF} className="btn btn-sm btn-success" title="Download today's PDF">
+                📄 PDF
               </button>
               {user && (
                 <>

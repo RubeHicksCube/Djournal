@@ -12,9 +12,8 @@ export default function Trackers() {
 
   // Duration form
   const [durationName, setDurationName] = useState('');
-  const [durationMinutes, setDurationMinutes] = useState('');
-  const [durationType, setDurationType] = useState('counter'); // 'timer' or 'counter'
-  const [manualTimeInput, setManualTimeInput] = useState(''); // For manually setting elapsed time
+  const [manualTimeInput, setManualTimeInput] = useState({}); // For manually setting elapsed time per tracker
+  const [showManualInput, setShowManualInput] = useState({}); // Track which tracker's manual input is shown
   const [currentTime, setCurrentTime] = useState(new Date());
 
   // Custom Counter form
@@ -82,25 +81,39 @@ export default function Trackers() {
     if (!durationName.trim()) return;
 
     try {
-      const data = await api.updateDurationTracker(durationName, durationType);
+      const data = await api.updateDurationTracker(durationName);
       setState(data);
       setDurationName('');
-      setDurationMinutes('');
-      setManualTimeInput('');
     } catch (error) {
       console.error('Error adding duration tracker:', error);
     }
   };
 
-  const handleSetManualTime = async (trackerId, minutes) => {
-    if (!minutes || minutes <= 0) return;
-    
+  const handleSetManualTime = async (trackerId, timeInput) => {
+    if (!timeInput || !timeInput.trim()) return;
+
     try {
-      // Convert minutes to milliseconds and set as elapsed time
-      const elapsedMs = minutes * 60 * 1000;
+      let totalSeconds = 0;
+
+      // Parse HH:MM format (e.g., "4:30" or "04:30" or "1:15")
+      if (timeInput.includes(':')) {
+        const parts = timeInput.split(':');
+        const hours = parseInt(parts[0]) || 0;
+        const minutes = parseInt(parts[1]) || 0;
+        totalSeconds = (hours * 3600) + (minutes * 60);
+      } else {
+        // If just a number, treat as hours
+        const hours = parseFloat(timeInput) || 0;
+        totalSeconds = hours * 3600;
+      }
+
+      if (totalSeconds <= 0) return;
+
+      // Convert to milliseconds
+      const elapsedMs = totalSeconds * 1000;
       // Create a fake start time that results in the desired elapsed time
       const startTime = new Date(Date.now() - elapsedMs);
-      
+
       const response = await fetch('/api/trackers/manual-time', {
         method: 'POST',
         headers: {
@@ -109,11 +122,12 @@ export default function Trackers() {
         },
         body: JSON.stringify({ trackerId, startTime, elapsedMs })
       });
-      
+
       const data = await response.json();
       if (response.ok) {
         setState(data);
-        setManualTimeInput('');
+        setManualTimeInput(prev => ({ ...prev, [trackerId]: '' }));
+        setShowManualInput(prev => ({ ...prev, [trackerId]: false }));
       }
     } catch (error) {
       console.error('Error setting manual time:', error);
@@ -137,30 +151,53 @@ export default function Trackers() {
 const calculateDaysSince = (date) => {
     const then = new Date(date);
     const now = new Date();
-    const diffTime = Math.abs(now - then);
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    const diffHours = Math.floor((diffTime % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    const diffMinutes = Math.floor((diffTime % (1000 * 60 * 60)) / (1000 * 60));
-    
-    if (diffDays > 0) {
-      return `${diffDays}d ${diffHours}h ${diffMinutes}m ago`;
-    } else if (diffHours > 0) {
-      return `${diffHours}h ${diffMinutes}m ago`;
-    } else {
-      return `${diffMinutes}m ago`;
-    }
+    let diffMinutes = Math.floor((now - then) / (1000 * 60)); // total minutes
+
+    const years = Math.floor(diffMinutes / (365.25 * 24 * 60));
+    diffMinutes -= Math.floor(years * 365.25 * 24 * 60);
+
+    const months = Math.floor(diffMinutes / (30.44 * 24 * 60));
+    diffMinutes -= Math.floor(months * 30.44 * 24 * 60);
+
+    const weeks = Math.floor(diffMinutes / (7 * 24 * 60));
+    diffMinutes -= weeks * 7 * 24 * 60;
+
+    const days = Math.floor(diffMinutes / (24 * 60));
+    diffMinutes -= days * 24 * 60;
+
+    const hours = Math.floor(diffMinutes / 60);
+    diffMinutes -= hours * 60;
+
+    const minutes = diffMinutes;
+
+    // Build string with non-zero values (no seconds)
+    const parts = [];
+    if (years > 0) parts.push(`${years}y`);
+    if (months > 0) parts.push(`${months}mo`);
+    if (weeks > 0) parts.push(`${weeks}w`);
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0 || parts.length === 0) parts.push(`${minutes}m`);
+
+    return parts.join(' ') + ' ago';
   };
 
   const calculateElapsedTime = (tracker) => {
     if (tracker.type !== 'timer') return null;
-    
+
     let elapsedMs = tracker.elapsedMs || 0;
     if (tracker.isRunning && tracker.startTime) {
       elapsedMs += Date.now() - new Date(tracker.startTime).getTime();
     }
-    
-    const minutes = Math.floor(elapsedMs / 60000);
-    const seconds = Math.floor((elapsedMs % 60000) / 1000);
+
+    const totalSeconds = Math.floor(elapsedMs / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
     return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
   };
 
@@ -191,14 +228,6 @@ const calculateDaysSince = (date) => {
     }
   };
 
-  const handleIncrementCounter = async (id) => {
-    try {
-      const data = await api.incrementCounter(id);
-      setState(data);
-    } catch (error) {
-      console.error('Error incrementing counter:', error);
-    }
-  };
 
   const handleCreateCustomCounter = async (e) => {
     e.preventDefault();
@@ -237,6 +266,18 @@ const calculateDaysSince = (date) => {
       setState(data);
     } catch (error) {
       console.error('Error deleting counter:', error);
+    }
+  };
+
+  const handleSetCounterValue = async (id, value) => {
+    const numValue = parseInt(value);
+    if (isNaN(numValue) || numValue < 0) return;
+
+    try {
+      const data = await api.setCounter(id, numValue);
+      setState(data);
+    } catch (error) {
+      console.error('Error setting counter value:', error);
     }
   };
 
@@ -282,7 +323,7 @@ const calculateDaysSince = (date) => {
                   <div className="tracker-info">
                     <strong>{tracker.name}</strong>
                     <span className="tracker-detail">
-                      {tracker.date} • {calculateDaysSince(tracker.date)} days ago
+                      {tracker.date} • {calculateDaysSince(tracker.date)}
                     </span>
                   </div>
                   <button
@@ -302,25 +343,17 @@ const calculateDaysSince = (date) => {
 
         <div className="card card-success">
           <h2>⏳ Activity Duration</h2>
-          <p className="card-description">Track activities with timers or counters</p>
+          <p className="card-description">Track activities with timers</p>
 
           <form onSubmit={handleAddDuration} className="tracker-form">
             <input
               type="text"
               className="form-input"
-              placeholder="Activity name (e.g., 'Workout', 'Pushups')"
+              placeholder="Activity name (e.g., 'Workout')"
               value={durationName}
               onChange={(e) => setDurationName(e.target.value)}
             />
-            <select
-              value={durationType}
-              onChange={(e) => setDurationType(e.target.value)}
-              className="form-select"
-            >
-              <option value="counter">Counter (reps, sets)</option>
-              <option value="timer">Timer (stopwatch)</option>
-            </select>
-            <button type="submit" className="btn btn-sm btn-success">Add</button>
+            <button type="submit" className="btn btn-sm btn-success">Add Timer</button>
           </form>
 
           {state.durationTrackers.length > 0 && (
@@ -330,57 +363,63 @@ const calculateDaysSince = (date) => {
                   <div className="tracker-info">
                     <strong>{tracker.name}</strong>
                     <span className="tracker-detail">
-                      {tracker.type === 'timer' ? (
-                        <span className="timer-display">
-                          ⏱️ {calculateElapsedTime(tracker)}
-                        </span>
-                      ) : (
-                        <span className="counter-display">
-                          🔢 {tracker.count || 0}
-                        </span>
-                      )}
+                      <span className="timer-display">
+                        ⏱️ {calculateElapsedTime(tracker)}
+                      </span>
                     </span>
                   </div>
                   <div className="tracker-controls">
-                    {tracker.type === 'timer' ? (
-                      <div className="timer-controls">
+                    <div className="timer-controls">
+                      <button
+                        onClick={() => tracker.isRunning ? handleStopTimer(tracker.id) : handleStartTimer(tracker.id)}
+                        className={`btn btn-sm ${tracker.isRunning ? 'btn-danger' : 'btn-success'}`}
+                      >
+                        {tracker.isRunning ? '⏸️' : '▶️'}
+                      </button>
+                      <button
+                        onClick={() => handleResetTimer(tracker.id)}
+                        className="btn btn-sm btn-secondary"
+                      >
+                        🔄
+                      </button>
+                      <button
+                        onClick={() => setShowManualInput(prev => ({ ...prev, [tracker.id]: !prev[tracker.id] }))}
+                        className="btn btn-sm btn-primary"
+                        title="Set manual time"
+                      >
+                        ⏱️
+                      </button>
+                    </div>
+                    {showManualInput[tracker.id] && (
+                      <div className="manual-time-input">
+                        <input
+                          type="text"
+                          placeholder="H:MM (e.g., 4:30 or 1:15)"
+                          value={manualTimeInput[tracker.id] || ''}
+                          onChange={(e) => setManualTimeInput(prev => ({ ...prev, [tracker.id]: e.target.value }))}
+                          className="form-input form-input-sm"
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleSetManualTime(tracker.id, manualTimeInput[tracker.id]);
+                            }
+                          }}
+                        />
                         <button
-                          onClick={() => tracker.isRunning ? handleStopTimer(tracker.id) : handleStartTimer(tracker.id)}
-                          className={`btn btn-sm ${tracker.isRunning ? 'btn-danger' : 'btn-success'}`}
-                        >
-                          {tracker.isRunning ? '⏸️' : '▶️'}
-                        </button>
-                        <button
-                          onClick={() => handleResetTimer(tracker.id)}
-                          className="btn btn-sm btn-secondary"
-                        >
-                          🔄
-                        </button>
-                        <div className="manual-time-input">
-                          <input
-                            type="number"
-                            placeholder="Min"
-                            min="1"
-                            value={manualTimeInput}
-                            onChange={(e) => setManualTimeInput(e.target.value)}
-                            className="form-input form-input-sm"
-                          />
-                          <button
-                            onClick={() => handleSetManualTime(tracker.id, parseInt(manualTimeInput))}
-                            className="btn btn-sm btn-primary"
-                            title="Set manual time spent"
-                          >
-                            ⏱️ Set
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="counter-controls">
-                        <button
-                          onClick={() => handleIncrementCounter(tracker.id)}
+                          onClick={() => handleSetManualTime(tracker.id, manualTimeInput[tracker.id])}
                           className="btn btn-sm btn-success"
+                          title="Set time"
                         >
-                          +1
+                          Set
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowManualInput(prev => ({ ...prev, [tracker.id]: false }));
+                            setManualTimeInput(prev => ({ ...prev, [tracker.id]: '' }));
+                          }}
+                          className="btn btn-sm btn-secondary"
+                          title="Cancel"
+                        >
+                          Cancel
                         </button>
                       </div>
                     )}
@@ -404,7 +443,7 @@ const calculateDaysSince = (date) => {
           <h2>🔢 Custom Counters</h2>
           <p className="card-description">Track daily counts (water, coffee, calories, etc.)</p>
 
-          <form onSubmit={handleCreateCustomCounter} className="tracker-form">
+          <form onSubmit={handleCreateCustomCounter} className="tracker-form-vertical">
             <input
               type="text"
               className="form-input"
@@ -412,7 +451,7 @@ const calculateDaysSince = (date) => {
               value={counterName}
               onChange={(e) => setCounterName(e.target.value)}
             />
-            <button type="submit" className="btn btn-sm btn-primary">Create Counter</button>
+            <button type="submit" className="btn btn-sm btn-success">Add Counter</button>
           </form>
 
           {state.customCounters && state.customCounters.length > 0 && (
@@ -421,9 +460,21 @@ const calculateDaysSince = (date) => {
                 <div key={counter.id} className="tracker-item counter-item">
                   <div className="tracker-info">
                     <strong>{counter.name}</strong>
-                    <span className="counter-display-large">
-                      {counter.value}
-                    </span>
+                    <input
+                      type="number"
+                      className="counter-value-input"
+                      value={counter.value}
+                      onChange={(e) => handleSetCounterValue(counter.id, e.target.value)}
+                      onBlur={(e) => handleSetCounterValue(counter.id, e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleSetCounterValue(counter.id, e.target.value);
+                          e.target.blur();
+                        }
+                      }}
+                      min="0"
+                      style={{ width: '80px', textAlign: 'center', fontSize: '1.5rem', fontWeight: 'bold' }}
+                    />
                   </div>
                   <div className="tracker-controls">
                     <div className="counter-controls-large">
